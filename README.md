@@ -1,18 +1,18 @@
 # QuietGlass
 
-A tiny Mac notch that blurs your screen when you look away with AirPods. It keeps the desktop's colors and softens its details, with a feathered transition that follows your head movement.
+A tiny Mac notch that blurs your screen when you look away with AirPods. It also offers app rules, a persistent privacy-blur shortcut, selected-window blur, guided calibration, and optional local sensitive-text detection.
 
 ## Start
 
 1. Build the app, or unzip `QuietGlass.zip` and move the app to Applications.
 2. Connect and wear compatible AirPods, then open QuietGlass. A thin 40 × 8-point dash appears above the Dock.
 3. Hover over the dash to reveal three black buttons: tracking, recenter, and blur preview. Hover a button to see its label.
-4. Right-click the notch and choose **Settings…** to allow Motion & Fitness and Screen Recording if needed. Start tracking, face the screen, and click **Recenter**.
+4. Start tracking from the notch or Settings. On first use, follow the guided setup to connect AirPods, check four head directions, learn your comfortable range, and try a sample blur. Allow Motion & Fitness and Screen Recording if needed. On later launches, face the screen and click **Recenter**.
 5. Look away to blur the screen; look back to clear it. **Preview blur** works without AirPods and ends after five seconds. Click **Clear preview** or press Escape to clear it sooner.
 
 **Escape** clears the blur immediately. The default recenter shortcut is **Control–Option–Command–C**, which also starts tracking if paused. Change it under **More** in the controls.
 
-The dash morphs into the controls on hover and smoothly closes when the pointer leaves. Its drawing area stays in place until the closing animation finishes, including when the pointer returns mid-transition. It defaults to screen center, just above the Dock, and slides down near the bottom edge in full screen or when the Dock is hidden. Returning to the desktop restores its position above the Dock. Drag it to save a custom position. The top of the display is excluded: releasing there returns the notch to its previous position, and older saved top positions return to the bottom at launch. Near either side of the screen, the notch snaps to the edge and smoothly stacks its controls vertically. Labels, settings, and the context menu open inward. Drag back near the bottom center to restore automatic Dock placement. **Move Notch Down** restores automatic Dock placement. Right-click for **Hide for 1 hour**, **Settings…**, **Move Notch Down**, tracking, recenter, preview, and clear actions. The menu bar eye offers show/hide, position reset, controls, and quit. The app starts paused after launch and requires a new calibration. There is no main settings window.
+The dash morphs into the controls on hover and smoothly closes when the pointer leaves. Its drawing area stays in place until the closing animation finishes, including when the pointer returns mid-transition. It defaults to screen center, just above the Dock, and slides down near the bottom edge in full screen or when the Dock is hidden. Returning to the desktop restores its position above the Dock. Drag it to save a custom position. The top of the display is excluded: releasing there returns the notch to its previous position, and older saved top positions return to the bottom at launch. Near either side of the screen, the notch snaps to the edge and smoothly stacks its controls vertically. Labels, compact controls, and the context menu open inward. Drag back near the bottom center to restore automatic Dock placement. **Move Notch Down** restores automatic Dock placement. Right-click for **Hide for 1 hour**, **Control**, **Settings…**, **Move Notch Down**, tracking, recenter, preview, and clear actions. Head tracking starts paused after launch and requires a new calibration. The main window opens by default as one scrolling page with protection, app rules, and calibration. **Control** opens the compact notch controls. **Settings…** in the notch menu, compact controls, or menu bar opens the full privacy window. Its dark layout groups related settings into bordered cards with QuietGlass pink switches. Blur strength includes a live image preview, low/high endpoint buttons, and native Liquid Glass preview controls on macOS 26 or later, with a material fallback on earlier systems. Closing the window leaves the notch running. It opens at 1106 × 850 points, fitted to the usable display area on smaller screens. The green window button and Control–Command–F toggle native full screen.
 
 Requires macOS 14 or later and AirPods 3/4, AirPods Pro, or AirPods Max. At least one compatible earbud must be worn. Permission settings are managed by macOS; a rebuilt, locally signed app may require renewed approval and a relaunch.
 
@@ -28,6 +28,19 @@ If toggling and restarting still do not help, remove the stale **QuietGlass** en
 | Start blurring | 15° | Head movement allowed before blur begins |
 | Transition | 18° | Additional movement until the entire display is blurred |
 | Recenter shortcut | ⌃⌥⌘C | Records the head position facing the display |
+| Privacy shortcut | ⌃⌥⌘P | Toggles full-screen blur on every display |
+| Hold to peek | ⌃⌥⌘Space | Temporarily hides privacy blur until released |
+
+## Privacy settings
+
+- **Instant privacy:** full-screen blur stays active until you clear it and works without AirPods. Screen Recording permission is required. Escape clears it immediately. The main window hides when privacy blur starts, and the notch remains available above it. This is visual protection, not a Mac lock.
+- **App rules:** add the active app or choose an application. Each app has an inline slider with Paused, Standard, and Stronger positions. Right-click a rule to remove it. Standard uses your settings. Stronger caps the start angle at 8° and transition at 12° and raises blur to at least 45, without weakening settings that are already stronger. Paused applies only to automatic head blur for the frontmost app; manual, selected-window, and text protection remain independent. Rules are saved by bundle identifier.
+- **Selected window:** choose a window with the macOS picker on macOS 15.2 or later, or use Protect active window on macOS 14 or later. The selected window remains blurred as it moves, accounting for windows in front. Selection lasts for this session, until removed or closed. It follows the same window identifier and does not select other windows from that app. Transient capture failure retains the last available blurred frame while you restore access or retry. Before the first captured frame, the window remains visible.
+- **Guided setup:** Settings → Calibration → Set up opens a compact motion guide with an animated head and pink progress ring. Progress comes from AirPods motion, without a camera or face scan. Complete four directions, learn a comfortable range, and check the sample blur before finishing. Automatic head blur pauses during setup. Closing the popup or pressing Escape restores your prior sensitivity and tracking state when its motion reference is still valid. After completion, the button becomes Recalibrate. Animations respect Reduce Motion.
+- **Calibration:** with AirPods connected and tracking started, face your screen and choose Learn for 8 seconds. Read normally while making small movements. Head blur pauses during learning. QuietGlass uses the 95th percentile plus a 3° margin, rejects unreliable samples, and suggests an angle between 6° and 25°. Apply the suggestion explicitly. Motion loss cancels learning.
+- **Local text detection:** off by default. Apple Vision recognizes visible text on your displays and blurs matching credentials, optional email addresses, and optional payment card numbers with valid checksums. Scanning is throttled to at most once per second per display; recognition can take longer, especially on first use. Text is processed in memory and never saved or uploaded. There is no LLM provider, API key, server, or external package dependency.
+
+Escape or Clear Screen pauses window and text protection until you click Resume. Enabling text detection or selecting a window also resumes those features. Text-detection preferences persist across launches, while head tracking always starts paused. The first enabled scan can take time to initialize Vision. Detection can miss or misclassify text, and content may be visible before recognition finishes. Use the privacy shortcut to blur the whole display instead of waiting for text detection. Capture still needs time to produce its first frame, and lighter blur can leave text readable. Overlay protection does not guarantee redaction in recordings or screen sharing.
 
 Existing saved preferences are preserved. After calibration, losing the motion signal keeps blur requested until you recenter or dismiss it. Sleep/wake and changing the active earbud require recentering.
 
@@ -37,9 +50,11 @@ Small movements around the trigger angle now stay in a tolerance band instead of
 
 ScreenCaptureKit streams display frames while blur is active, excluding QuietGlass itself and capturing no audio. Core Image applies Gaussian blur without a white/gray tint or saturation change. Frames update up to 30 times per second and remain in memory. A directional, feathered mask animates independently at the display's reported refresh rate, using a critically damped spring to make reversals smooth. Escape, pause, and quit clear immediately.
 
-The app does not show a solid-color cover while capture is unavailable. Before the first usable frame, the desktop stays clear and the controls show the capture error; a previously blurred frame remains visible during a transient capture failure. Screen access is necessary for the blur to work.
+Automatic head blur does not show a solid-color cover while capture is unavailable. Before its first usable frame, the desktop stays clear and the controls show the capture error; a previously blurred frame remains visible during a transient capture failure. Window, text, and full-screen privacy protection all use captured Gaussian blur at your selected strength. They do not substitute black or opaque covers. Before a first frame is available, the underlying content remains visible; errors are shown in the controls.
 
-The floating panel stays above the blur and is clickable without replacing your current main window. The three hover buttons have black capsule backgrounds and floating labels. The right-click menu is a measured panel above the control row, and Recenter is disabled until tracking is ready. Escape and clicking outside close the menu; arrow keys and Return select an action. The settings popover opens only on demand, with a larger close-button target that accepts the first click. Controls use rounded stroke icons. Recenter uses a compact focus mark; Move Notch Down uses a bottom-dock symbol. Settings and the context menu sit 8 points from the controls, including when the advanced settings resize and when the Dock hides in full screen. Clicking outside either panel closes it. The connected-AirPods indicator uses the native `airpodspro` symbol in white hierarchical rendering.
+Both blur modes use floating, nonactivating overlay panels across Spaces. Work-area notifications preserve capture sessions and the last blurred image. A physical display-frame change restarts capture only for that display, retaining its image while the replacement stream starts.
+
+The floating panel stays above the blur and is clickable without replacing your current main window. The three hover buttons have black capsule backgrounds and floating labels. The right-click menu is a measured panel above the control row, and Recenter is disabled until tracking is ready. Escape and clicking outside close the menu; arrow keys and Return select an action. The Control popover opens only on demand, with a larger close-button target that accepts the first click. Controls use rounded stroke icons. Recenter uses a compact focus mark; Move Notch Down uses a bottom-dock symbol. The Control popover and context menu sit 8 points from the controls, including when the advanced settings resize and when the Dock hides in full screen. Clicking outside either panel closes it. The connected-AirPods indicator uses the native `airpodspro` symbol in white hierarchical rendering.
 
 ## Build
 
@@ -66,13 +81,15 @@ Signing and archiving happen in a temporary directory because Documents sync can
 
 ## Privacy and limitations
 
-QuietGlass captures screen images to render the effect. It does not save those images, upload data, record microphone audio, use the camera, or log motion. Only app preferences are persisted. Capture stops after the blur clears.
+Known issue in build 39: blur can disappear during three-finger swipes between Spaces or full-screen apps and return after a delay. This affects automatic head blur and instant privacy and remains under investigation.
+
+QuietGlass captures screen images to render blur or detect text when enabled. It does not save images or recognized text, upload data, record microphone audio, use the camera, or log motion. Only app preferences and app rules are persisted. Capture stops when head blur clears and window/text protection is disabled or paused. Full-screen privacy blur also uses screen capture, which stays active while the shortcut mode is on.
 
 This is a visual blur, not a screen lock. Light blur and partial coverage can leave content readable. Head direction is not eye gaze. A live ScreenCaptureKit stream supplies up to 30 frames per second while the mask animates at the display refresh rate. Late frames are dropped instead of queued. Existing pixels and windows remain in place through Space and work-area changes and transient capture failures. This is still a composited blur, so there can be some capture latency. Multiple displays, Spaces, full-screen apps, sleep/wake, and earbud switching need broader hardware testing.
 
 ## Technical references
 
-Technical references: [headphone motion](https://developer.apple.com/documentation/coremotion/cmheadphonemotionmanager), [ScreenCaptureKit](https://developer.apple.com/documentation/screencapturekit), and [Core Image](https://developer.apple.com/documentation/coreimage).
+Technical references: [headphone motion](https://developer.apple.com/documentation/coremotion/cmheadphonemotionmanager), [ScreenCaptureKit](https://developer.apple.com/documentation/screencapturekit), [Vision text recognition](https://developer.apple.com/documentation/vision/vnrecognizetextrequest), and [Core Image](https://developer.apple.com/documentation/coreimage).
 
 The bundled icon geometry is rendered as native SwiftUI/AppKit paths by `AppIcon.swift`, with no runtime dependency. The required attribution is in [Resources/Icons/LICENSE.md](Resources/Icons/LICENSE.md) and packaged as `ThirdPartyNotices.txt` in the app.
 
@@ -83,9 +100,17 @@ The bundled icon geometry is rendered as native SwiftUI/AppKit paths by `AppIcon
 - `Sources/QuietGlass/DisplayCapture.swift`: live display streams and bounded background Gaussian rendering.
 - `Sources/ShieldCore/NotchDocking.swift`: edge docking and panel geometry.
 - `Sources/QuietGlass/AppModel.swift`: motion, calibration, permissions, and preferences.
+- `Sources/QuietGlass/HeadSetup.swift`: guided setup popup, live motion visualization, and sample blur check.
+- `Sources/ShieldCore/HeadSetupProgress.swift`: sustained directional motion checks and invalid-sample rejection.
 - `Sources/QuietGlass/NotchBar.swift`: floating notch and compact controls.
 - `Sources/QuietGlass/AppIcon.swift`: native vector icon rendering.
-- `Sources/QuietGlass/GlobalShortcuts.swift`: recenter and temporary Escape registration.
+- `Sources/QuietGlass/GlobalShortcuts.swift`: recenter, instant privacy, hold-to-peek, and temporary Escape registration.
+- `Sources/QuietGlass/PrivacyController.swift`: app rules, window selection, capture, and protection lifecycle.
+- `Sources/QuietGlass/PrivacySettings.swift`: privacy, app-rule, and calibration controls.
+- `Sources/QuietGlass/BlurStrengthControl.swift`: live sample preview and shared blur sliders.
+- `Sources/QuietGlass/LocalTextAnalyzer.swift`: bounded local Vision recognition without text persistence.
+- `Sources/ShieldCore/PrivacyPolicy.swift`: app policies, calibration, and display geometry.
+- `Sources/ShieldCore/SensitiveText.swift`: credential, email, and checksum-validated card detection.
 - `Sources/QuietGlass/QuietGlassApp.swift`: application lifecycle and menu bar.
 
 See [VALIDATION.md](VALIDATION.md) for verified behavior and remaining hardware checks.

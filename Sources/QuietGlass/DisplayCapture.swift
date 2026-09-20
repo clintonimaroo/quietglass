@@ -1,4 +1,4 @@
-//  Created by Clinton Imaro on 20/09/2026.
+// Clinton Imaro was here 20/09/2026.
 
 import CoreImage
 import ScreenCaptureKit
@@ -11,6 +11,7 @@ final class DisplayCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     private let context = CIContext(options: [.cacheIntermediates: false])
     private let onFrame: @MainActor (CGImage) -> Void
     private let onFailure: @MainActor (Error) -> Void
+    private let onSample: ((CVPixelBuffer) -> Void)?
     private var radius: Double
     private var pendingBuffer: CVPixelBuffer?
     private var lastBuffer: CVPixelBuffer?
@@ -19,11 +20,13 @@ final class DisplayCapture: NSObject, SCStreamOutput, SCStreamDelegate {
 
     init(id: UUID, filter: SCContentFilter, configuration: SCStreamConfiguration, radius: Double,
          onFrame: @escaping @MainActor (CGImage) -> Void,
-         onFailure: @escaping @MainActor (Error) -> Void) {
+         onFailure: @escaping @MainActor (Error) -> Void,
+         onSample: ((CVPixelBuffer) -> Void)? = nil) {
         self.id = id
         self.radius = radius
         self.onFrame = onFrame
         self.onFailure = onFailure
+        self.onSample = onSample
         super.init()
         stream = SCStream(filter: filter, configuration: configuration, delegate: self)
     }
@@ -65,6 +68,7 @@ final class DisplayCapture: NSObject, SCStreamOutput, SCStreamDelegate {
               SCFrameStatus(rawValue: rawStatus) == .complete,
               let buffer = sampleBuffer.imageBuffer else { return }
         lastBuffer = buffer
+        onSample?(buffer)
         pendingBuffer = buffer
         renderNextFrame()
     }
@@ -77,9 +81,9 @@ final class DisplayCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         renderQueue.async { [self] in
             let image: CGImage? = autoreleasepool {
                 let input = CIImage(cvPixelBuffer: buffer)
-                let output = input.clampedToExtent()
+                let output = radius > 0 ? input.clampedToExtent()
                     .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: radius])
-                    .cropped(to: input.extent)
+                    .cropped(to: input.extent) : input
                 return context.createCGImage(output, from: input.extent)
             }
             frameQueue.async { [self] in

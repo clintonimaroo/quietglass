@@ -1,5 +1,42 @@
 # Validation — September 19, 2026
 
+## Guided head setup and Space continuity (builds 36–39, September 20)
+
+- Added first-use head tracking setup and a Recalibrate entry point. The guide checks sustained motion in four directions, reuses the eight-second sensitivity calibration, and tests blur on the bundled sample image. Progress comes from AirPods motion. No camera, face recognition, motion recording, or network service is used.
+- Reproduced the nonworking Set up button: assigning an unconstrained hosting controller collapsed its panel to zero width and height. Explicit content sizing and fixed limits prevent the collapse, with an AppKit regression test. Build 36 opened successfully and live AirPods input completed all four directions. The user also reached the sample-blur step and completed setup, saving a 14° start angle.
+- Refined the guide to a 420-by-520-point content area, measuring 420 by 552 points including the native title bar. Removed the disabled window buttons and Cancel button. The main action is a full-width pink capsule; the close button and Escape dismiss setup. Disabled actions remain readable. Short crossfades and spring-smoothed head movement respect Reduce Motion.
+- Removed the visible app-rule delete button and retained Remove rule in its context menu. Restored native gray shortcut text in the menu-bar menu; Settings and compact-control shortcut labels remain pink.
+- Confirmed that closing Settings leaves the running notch visible. The app now returns to accessory activation when it loses focus; focusing Settings restores its regular window behavior. Blur panels explicitly use floating, nonactivating panel behavior for other applications' full-screen Spaces, following [Apple's overlay guidance](https://developer.apple.com/forums/thread/826308).
+- Found and removed a privacy-capture teardown on every screen-parameter notification. Work-area changes now preserve existing surfaces, captured pixels, and streams. Only displays whose frames change restart their stream; removed displays release their resources. A regression test verifies repeated screen notifications retain the same panel and captured image.
+- All 43 automated tests passed in build 38, including directional sample validation, setup panel sizing, floating overlay configuration, and retained privacy pixels. Build 39 adds only setup animation refinements. Live WindowServer observations retained the privacy panel identifier during Mission Control entry and exit. The user subsequently confirmed that blur still disappears during three-finger Space transitions after build 39. This remains an unresolved issue in both blur modes; the existing automated checks do not cover that interaction. No claim is made of a complete multi-display hardware test.
+- Build 39 is installed in Applications. Release compilation, shell syntax, plist validation, whitespace checks, and strict signature verification passed. The installed app retains the same certificate-bound signing requirement; no signing key was exported and no screen-access permission reset was needed.
+
+## App-rule sliders and shortcut color (build 34, September 20)
+
+- Replaced each app-rule dropdown with an inline pink slider using Paused, Standard, and Stronger positions. Removed its endpoint icons while retaining them on the main blur-strength slider. Existing saved modes and behavior are unchanged.
+- A live slider change selected Standard, and restoring Stronger was confirmed before the update. The installed build exposes the saved Stronger value and no app-rule endpoint buttons.
+- Shortcut labels use QuietGlass pink in the settings page, compact controls, notch context menu, recenter tooltip, and custom menu-bar shortcut text. Native system menu key equivalents retain system rendering.
+- Release build, shell syntax, plist validation, whitespace checks, and installed strict signature verification passed. The installed settings page visibly shows pink shortcuts. The latest core test run remains 37 passing tests; these subsequent changes affect presentation only.
+
+## Settings layout and blur preview (build 32, September 20)
+
+- Replaced the tabs with one scrolling page, removed the visible Settings heading, and applied the charcoal card layout with QuietGlass pink switches and sliders. Control opens the compact notch controls; Settings opens the full privacy window.
+- The default outer window frame measured 1106 by 850 points after a fresh launch. The window exposes native full-screen controls and Control–Command–F; a live transition expanded it to the display width. A complete, uninterrupted full-screen round trip still needs confirmation.
+- Added a live blur preview using the supplied finance-page image, native Liquid Glass badges on macOS 26 or later, and Apple's outlined/filled capsule-on-rectangle endpoint symbols. The preview and slider width is capped at 460 points. Visually checked the installed image, smaller layout, pink slider, and symbols.
+- All 37 automated tests passed on build 31. Build 32 changes only the preview asset, aspect ratio, and layout. Both release builds passed, and the installed application passed strict signature verification with the same designated requirement. No screen-access approval reset was required.
+- Builds 23 through 32 supersede the build 22 installation hold below. Existing app rules and user preferences were preserved. Broader multi-display and physical-gesture checks remain outstanding.
+
+## Privacy controls and default main window (build 22, September 20)
+
+- Added persistent full-screen privacy blur (Control–Option–Command–P), hold-to-peek (Control–Option–Command–Space), and Escape dismissal. Full-screen, selected-window, and detected-text protection all use captured Gaussian blur at the saved strength. No opaque or black fallback layers are used.
+- Added app rules keyed by bundle identifier, native selected-window picking on macOS 15.2+, and active-window selection for macOS 14+. Window geometry excludes areas covered by foreground windows and keeps QuietGlass controls usable. Window selection is session-only.
+- Added an eight-second calibration that suggests a start angle for explicit acceptance. It rejects insufficient or unreliable samples and cancels on motion loss, sleep, or an active-earbud change.
+- Added optional local Vision OCR for credentials, emails, and checksum-validated card numbers. Scan work is bounded and throttled, recognition results remain in memory, and no LLM or network provider is used. Detection is disabled by default; an enabled preference persists across launches.
+- Kept the approved native three-tab layout, enlarged its default window, added a shared blur-strength slider, and made the window open on launch and reopen. Closing it returns the app to its notch/menu-bar presence. Command-Q is available while the main window is active.
+- All 37 automated tests passed, including a real Vision OCR check against a synthetic image, sensitive-text matching, calibration rejection/limits, window occlusion, offset display coordinates, and blur-only rendering/peek behavior. Release build, shell syntax, plist validation, and whitespace checks passed.
+- Build 20 was used for an initial live UI check: the privacy window, app-rule and calibration controls were available, and Escape dismissed the privacy panel. It was superseded by the requested blur-only behavior and larger default window.
+- Build 22 installation and live interaction checks are pending while the Mac is locked. Multi-display hardware, hold-to-peek key release, native window picking, fast window dragging, and representative sensitive-text layouts require further live verification. OCR is probabilistic and may leave content visible before recognition. This does not guarantee protection in recordings or screen sharing.
+
 ## Placement, dismissal, and source cleanup (build 19, September 20)
 
 - Rejects drags into the top 120 points of the usable display, with a proportional margin on short displays. A rejected drop restores the original position and orientation. Saved floating positions in that region reset to bottom-center on launch.

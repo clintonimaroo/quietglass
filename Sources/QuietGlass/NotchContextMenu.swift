@@ -3,7 +3,7 @@
 import SwiftUI
 
 enum NotchMenuAction: CaseIterable {
-    case snooze, settings, resetPosition, tracking, recenter, preview, clear
+    case snooze, controls, settings, resetPosition, tracking, recenter, preview, clear
 }
 
 final class NotchMenuState: ObservableObject {
@@ -18,6 +18,7 @@ struct NotchContextMenuView: View {
     var body: some View {
         VStack(spacing: 2) {
             row(.snooze, "Hide for 1 hour", .clock)
+            row(.controls, "Control", .controls)
             row(.settings, "Settings…", .settings)
             row(.resetPosition, "Move Notch Down", .dockBottom)
             separator
@@ -49,7 +50,9 @@ struct NotchContextMenuView: View {
                 Text(title)
                 Spacer(minLength: 5)
                 if let shortcut {
-                    Text(shortcut).font(.system(size: 11)).opacity(highlighted ? 0.9 : 0.55)
+                    Text(shortcut).font(.system(size: 11))
+                        .foregroundStyle(Color(red: 0.94, green: 0.68, blue: 0.91))
+                        .opacity(enabled ? 1 : 0.5)
                 }
             }
             .font(.system(size: 13))

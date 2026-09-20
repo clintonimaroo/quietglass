@@ -160,7 +160,7 @@ final class NotchBarController: NSObject, NSWindowDelegate, NSPopoverDelegate {
         window.isOpaque = false
         window.backgroundColor = .clear
         window.hasShadow = false
-        window.level = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue + 2)
+        window.level = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue + 3)
         window.collectionBehavior = [.canJoinAllSpaces, .canJoinAllApplications, .fullScreenAuxiliary, .ignoresCycle]
     }
 
@@ -260,7 +260,7 @@ final class NotchBarController: NSObject, NSWindowDelegate, NSPopoverDelegate {
         guard state.expanded else { hover(true); return }
         switch action {
         case .tracking:
-            if model.previewing { model.dismissShield() }
+            if model.privacy.instant || model.previewing { model.dismissShield() }
             else if model.enabled { model.setEnabled(false) }
             else if !model.screenPermission || model.status == "Motion permission needed" { showControls() }
             else { model.setEnabled(true) }
@@ -521,7 +521,8 @@ final class NotchBarController: NSObject, NSWindowDelegate, NSPopoverDelegate {
         closeContextMenu()
         switch action {
         case .snooze: snooze()
-        case .settings: showControls()
+        case .controls: showControls()
+        case .settings: model.onOpenPrivacySettings?()
         case .resetPosition: resetPosition()
         case .tracking: perform(.tracking)
         case .recenter: if model.canRecenter { model.recenter() }
@@ -583,7 +584,7 @@ private struct NotchBarView: View {
                 .position(controlCenter(43, resting: 10))
                 .allowsHitTesting(state.expanded)
                 .accessibilityHidden(!state.expanded)
-            control(.tracking, icon: model.previewing ? .cancel : model.enabled ? .pause : .view)
+            control(.tracking, icon: model.privacy.instant || model.previewing ? .cancel : model.enabled ? .pause : .view)
                 .position(x: 24, y: 24)
         }
         .frame(width: 116, height: 116, alignment: .topLeading)
@@ -629,6 +630,7 @@ private struct NotchBarView: View {
     private func label(_ item: NotchAction) -> String {
         switch item {
         case .tracking:
+            if model.privacy.instant { return "Clear privacy shield" }
             if model.previewing { return "Clear preview" }
             if model.enabled { return "Pause tracking" }
             if !model.screenPermission { return model.screenAccessAction }
@@ -662,6 +664,7 @@ private struct NotchHintView: View {
     private var label: String {
         switch action {
         case .tracking:
+            if model.privacy.instant { return "Clear privacy shield" }
             if model.previewing { return "Clear preview" }
             if model.enabled { return "Pause tracking" }
             if !model.screenPermission { return model.screenAccessAction }
@@ -725,6 +728,10 @@ private struct NotchControlsView: View {
                 Text(notice).font(.system(size: 10)).foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            if let notice = model.privacy.notice {
+                Text(notice).font(.system(size: 10)).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             Divider().overlay(.white.opacity(0.06))
             adjustment("Blur strength", value: $model.blur, range: 10...70, suffix: "")
@@ -747,7 +754,9 @@ private struct NotchControlsView: View {
                         Spacer()
                         Button(model.recordingShortcut ? "Press keys…" : model.shortcutLabel) {
                             model.recordingShortcut.toggle()
-                        }.font(.system(size: 11, design: .monospaced))
+                        }
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(Color(red: 0.94, green: 0.68, blue: 0.91))
                     }
                     if let error = model.shortcutError {
                         Text(error).font(.system(size: 10)).foregroundStyle(.orange)
@@ -763,8 +772,15 @@ private struct NotchControlsView: View {
                     }
                 }.buttonStyle(.plain).font(.system(size: 11))
                 Spacer()
-                Text("esc to clear").font(.system(size: 10)).foregroundStyle(.tertiary)
+                HStack(spacing: 3) {
+                    Text("esc").foregroundStyle(Color(red: 0.94, green: 0.68, blue: 0.91))
+                    Text("to clear").foregroundStyle(.tertiary)
+                }.font(.system(size: 10))
             }
+            Button("Settings…") {
+                close()
+                model.onOpenPrivacySettings?()
+            }.buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(.secondary)
         }
         .padding(16)
         .frame(width: 276)
@@ -774,6 +790,7 @@ private struct NotchControlsView: View {
     }
 
     private var hint: String {
+        if model.privacy.instant { return "\(model.status). Press Escape to clear it." }
         if model.status == "Motion permission needed" { return "Allow AirPods motion to start." }
         if !model.screenPermission { return "Allow screen access for the blur effect." }
         if model.previewing { return "Preview clears after five seconds. Click again or press Escape to clear sooner." }

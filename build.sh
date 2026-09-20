@@ -29,6 +29,7 @@ mkdir -p "$quietglass_staged_app/Contents/MacOS" "$quietglass_staged_app/Content
 cp "$quietglass_bin_dir/QuietGlass" "$quietglass_staged_app/Contents/MacOS/QuietGlass"
 cp Resources/Info.plist "$quietglass_staged_app/Contents/Info.plist"
 cp Resources/Icons/LICENSE.md "$quietglass_staged_app/Contents/Resources/ThirdPartyNotices.txt"
+cp Resources/Preview/BlurPreview.png "$quietglass_staged_app/Contents/Resources/BlurPreview.png"
 xcrun actool Resources/AppIcon/QuietGlass.icon \
     --compile "$quietglass_staged_app/Contents/Resources" \
     --platform macosx --minimum-deployment-target 14.0 \

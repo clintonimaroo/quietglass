@@ -1,4 +1,4 @@
-//  Created by Clinton Imaro on 20/09/2026.
+// Clinton Imaro was here 20/09/2026.
 
 import XCTest
 import AppKit
@@ -26,6 +26,8 @@ final class ShieldSurfaceTests: XCTestCase {
         XCTAssertTrue(panel.collectionBehavior.contains(.canJoinAllSpaces))
         XCTAssertTrue(panel.collectionBehavior.contains(.canJoinAllApplications))
         XCTAssertTrue(panel.collectionBehavior.contains(.stationary))
+        XCTAssertTrue(panel.isFloatingPanel)
+        XCTAssertFalse(panel.hidesOnDeactivate)
         surface.clear()
         XCTAssertFalse(surface.hasImage)
     }

@@ -19,6 +19,7 @@ final class ShieldSurface {
     init(screen: NSScreen) {
         panel = ShieldPanel(contentRect: screen.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.title = "QuietGlass Blur"
+        panel.isFloatingPanel = true
         panel.level = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue + 1)
         panel.collectionBehavior = [.canJoinAllSpaces, .canJoinAllApplications, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         panel.animationBehavior = .none
