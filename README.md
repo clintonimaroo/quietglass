@@ -12,7 +12,7 @@ A tiny Mac notch that blurs your screen when you look away with AirPods. It keep
 
 **Escape** clears the blur immediately. The default recenter shortcut is **Control–Option–Command–C**, which also starts tracking if paused. Change it under **More** in the controls.
 
-The notch returns to a quiet dash when the pointer leaves. Drag it to move it; its position is remembered. Right-click for **Hide for 1 hour**, **Settings…**, tracking, recenter, preview, and clear actions. The menu bar eye offers show/hide, position reset, controls, and quit. The app starts paused after launch and requires a new calibration. There is no main settings window.
+The dash morphs into the controls on hover and smoothly closes when the pointer leaves. Its drawing area stays in place until the closing animation finishes, including when the pointer returns mid-transition. It defaults to screen center, just above the Dock. Older development positions are reset on this update; drag it to save a custom position. **Move Notch to Bottom Center** restores the Dock placement. Right-click for **Hide for 1 hour**, **Settings…**, tracking, recenter, preview, and clear actions. The menu bar eye offers show/hide, position reset, controls, and quit. The app starts paused after launch and requires a new calibration. There is no main settings window.
 
 Requires macOS 14 or later and AirPods 3/4, AirPods Pro, or AirPods Max. At least one compatible earbud must be worn. Permission settings are managed by macOS; a rebuilt, locally signed app may require renewed approval and a relaunch.
 
@@ -33,7 +33,7 @@ ScreenCaptureKit captures display snapshots while blur is active, excluding Quie
 
 The app does not show a solid-color cover while capture is unavailable. Before the first usable frame, the desktop stays clear and the controls show the capture error; a previously blurred frame remains visible during a transient capture failure. Screen access is necessary for the blur to work.
 
-The floating panel stays above the blur and is clickable without replacing your current main window. The three hover buttons have black capsule backgrounds and floating labels. A native right-click menu provides the other actions; the settings popover opens only on demand. All app-owned icons use the free Hugeicons Stroke Rounded set; no SF Symbols are used.
+The floating panel stays above the blur and is clickable without replacing your current main window. The three hover buttons have black capsule backgrounds and floating labels. The right-click menu is anchored above the control row, and Recenter is disabled until tracking is ready; the settings popover opens only on demand. All app-owned icons use the free Hugeicons Stroke Rounded set; no SF Symbols are used.
 
 ## Build
 

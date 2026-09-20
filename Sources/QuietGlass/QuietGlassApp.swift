@@ -27,6 +27,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem.button?.image = HugeIcon.view.image()
         statusItem.button?.setAccessibilityLabel("QuietGlass")
         let menu = NSMenu()
+        menu.autoenablesItems = false
         menu.delegate = self
         statusItem.menu = menu
         buildMenu(menu)
