@@ -1,3 +1,5 @@
+// Clinton Imaro was here 20/09/2026.
+
 import AppKit
 import Carbon
 import Combine
@@ -38,6 +40,7 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
     private var dismissedForLoss = false
     private var pendingCalibration = false
     private var timer: Timer?
+    private var previewEnd: Task<Void, Never>?
     private var observers: [NSObjectProtocol] = []
     private var keyCode: UInt32
     private var keyModifiers: UInt32
@@ -51,6 +54,7 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
         keyModifiers = prefs.object(forKey: "shortcutModifiers") == nil ? UInt32(controlKey | optionKey | cmdKey) : UInt32(prefs.integer(forKey: "shortcutModifiers"))
         shortcutLabel = prefs.string(forKey: "shortcutLabel") ?? "⌃⌥⌘C"
         super.init()
+        if screenPermission { UserDefaults.standard.set(true, forKey: "screenAccessPreviouslyGranted") }
         motion.delegate = self
         refreshResponse()
         shortcuts.onRecenter = { [weak self] in self?.recenter() }
@@ -59,11 +63,22 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
         overlay.onCaptureStatus = { [weak self] notice in
             if self?.captureNotice != notice { self?.captureNotice = notice }
         }
+        overlay.onPermissionDenied = { [weak self] in
+            guard let self else { return }
+            self.screenPermission = false
+            self.stopPreview()
+            self.clearOverlay()
+            self.status = "Screen access needed"
+            self.captureNotice = "Screen access is unavailable. Open Screen Settings to restore it."
+        }
         if !shortcuts.setRecenter(keyCode: keyCode, modifiers: keyModifiers) {
             shortcutError = "The recenter shortcut is in use. Record a different one."
         }
         observers.append(NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor in self?.overlay.rebuild(); self?.updateShield() }
+            Task { @MainActor in self?.overlay.reconcileScreens() }
+        })
+        observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.overlay.activeSpaceChanged() }
         })
         observers.append(NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.refreshScreenPermission() }
@@ -86,6 +101,8 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
 
     var fullCoverAngle: Int { Int(comfort + transition) }
     var canRecenter: Bool { enabled && connected && latest != nil }
+    var screenAccessPreviouslyGranted: Bool { UserDefaults.standard.bool(forKey: "screenAccessPreviouslyGranted") }
+    var screenAccessAction: String { screenAccessPreviouslyGranted ? "Restore screen access" : "Allow screen access" }
 
     func setEnabled(_ value: Bool) {
         if value { start() } else { stop() }
@@ -142,7 +159,6 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
         let q = sample.attitude.quaternion
         guard q.x.isFinite, q.y.isFinite, q.z.isFinite, q.w.isFinite else { return }
         if let previous = sourceLocation, previous != sample.sensorLocation {
-            // The newly active earbud may have a different inertial reference frame.
             center = nil
             calibrated = false
             detail = "The active AirPod changed. Face your screen and recenter."
@@ -217,7 +233,6 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
                 status = "Screen access needed"
                 return false
             }
-            // Do not cover the desktop unless the emergency shortcut can be registered.
             guard shortcuts.armEscape(true) else {
                 clearOverlay()
                 status = "Escape is unavailable"
@@ -242,12 +257,22 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
         stopPreview()
         guard applyCoverage(1, direction: .right) else { return }
         previewing = true
-        status = "Preview blur is on"
+        status = "Preview ends in 5 seconds"
+        previewEnd = Task { [weak self] in
+            do { try await Task.sleep(nanoseconds: 5_000_000_000) } catch { return }
+            guard !Task.isCancelled, let self, self.previewing else { return }
+            self.stopPreview(immediate: false)
+            if self.enabled { self.updateShield() }
+            else { self.status = "Ready when you are" }
+        }
     }
 
-    private func stopPreview() {
+    private func stopPreview(immediate: Bool = true) {
+        previewEnd?.cancel()
+        previewEnd = nil
         previewing = false
-        clearOverlay()
+        if immediate { clearOverlay() }
+        else { overlay.fadeOut(); coverage = 0 }
     }
 
     func openMotionSettings() {
@@ -283,12 +308,13 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
     }
 
     private func refreshScreenPermission() {
+        guard !overlay.isCapturing else { return }
         let permission = CGPreflightScreenCaptureAccess()
         guard permission != screenPermission else { return }
         screenPermission = permission
-        // A warning from a failed preview must not survive a successful grant.
         captureNotice = nil
         if permission {
+            UserDefaults.standard.set(true, forKey: "screenAccessPreviouslyGranted")
             if enabled { updateShield() }
             else { status = "Ready when you are" }
         } else {

@@ -1,5 +1,55 @@
 # Validation — September 19, 2026
 
+## Placement, dismissal, and source cleanup (build 19, September 20)
+
+- Rejects drags into the top 120 points of the usable display, with a proportional margin on short displays. A rejected drop restores the original position and orientation. Saved floating positions in that region reset to bottom-center on launch.
+- In the installed app, a valid drag changed the saved anchor from bottom y=20 to floating y=220; a subsequent top-edge drag left the anchor at y=220. Move Notch Down restored automatic bottom placement.
+- Popup positioning uses the actual visible Dock boundary instead of the stale desktop inset in full-screen Spaces. WindowServer measurements with the notch at bottom y=20 showed an 8-point gap for both the context menu and the settled settings popover.
+- Explicit local and global mouse handlers dismiss Settings on outside clicks while preserving clicks inside its window. Clicking Chrome's address bar closed the live Settings popover and returned the notch to its resting state.
+- Native menu contents now update in menuNeedsUpdate instead of mutating the structure during menuWillOpen. Direct outside-click validation of the menu-bar menu remains pending because the control tool cannot reliably select that status item.
+- All 22 automated tests passed, including new top exclusion and hidden-Dock popup geometry cases. Release build, plist validation, shell syntax, and whitespace checks passed.
+- Build 19 is installed in Applications. Its strict signature is valid, its designated requirement matches build 18, and its executable matches the signed distribution archive. Settings did not request screen-access setup after the update.
+- Removed explanatory comments and docstrings from Swift and shell code. Swift files have the requested dated author headers; the required Swift tools-version directive and shell interpreter directives remain. Third-party license notices remain in their separate resource file.
+- Added Git exclusions for signing material, credentials files, generated application bundles, and archives. Source candidates and Git history paths contain no signing files; source candidates contain no private-key blocks or common credential patterns.
+
+## Blur continuity, edge docking, and controls (build 18, September 20)
+
+- Replaced repeated screenshots with a live ScreenCaptureKit stream per display, capped at 30 fps with no audio capture. Rendering keeps only the latest pending frame, runs off the main thread, and preserves the original screen colors.
+- Display/work-area changes reconcile existing surfaces instead of clearing all panels, pixels, and transition state. Active-Space changes reassert existing panels; panels can join other applications' full-screen Spaces. Transient stream failures retain the last blurred frame while retrying. Explicit permission denial clears and presents a recovery action.
+- A running ScreenCaptureKit stream, whose revocation is enforced by macOS, is no longer torn down by repeated preflight polling. Screen-access and AirPods-motion prompts have separate labels; prior approval is remembered only for explanatory copy, never used as authorization.
+- Dragging into either middle side region morphs the notch into a vertical stack and snaps it to that edge. Tooltips, controls, and menus open inward. The bottom-center target restores automatic Dock following. Position and orientation persist. Docking has hysteresis and respects Reduce Motion.
+- `swift test`: 19 tests passed, including side/bottom docking, hysteresis, offset-display geometry, Dock visibility, and preserving a real AppKit panel and its pixels through geometry changes. Release build, shell syntax, and whitespace checks passed.
+- With explicit user approval, created a persistent local signing identity in the login Keychain, with user-level trust restricted to code signing. The build selects it automatically and refuses an ad-hoc fallback when its certificate exists but its key is unavailable. No TLS trust or system trust was changed, and signing itself does not grant Screen Recording.
+- The installed app and clean archive pass strict code-signature verification. Re-signed a scratch copy with different build metadata and confirmed the same certificate-bound designated requirement. Future builds can satisfy the same stored permission requirement. The earlier ad-hoc app is retained in the build archive.
+- Renewed the old ad-hoc Screen Recording entry once for the persistent identity, with the user handling macOS authentication. Builds 14 through 18 retained the same certificate-bound requirement. The running updated controls showed Start tracking without a screen-access setup warning. Build 18 successfully displayed its rendered blur preview and cleared afterward without another permission prompt.
+- During the build-13 Space-switch test, the same blur-panel window remained on screen throughout its active preview (about 5.44 seconds including the transition) and then cleared. Active-Space notifications were logged without panel replacement. This verifies panel retention through desktop switches; the exact visual appearance during a physical three-finger gesture and multiple-display behavior still need broader hardware testing.
+- Replaced the arrow-and-target recenter mark with a compact focus icon in the notch and context menu. Added Move Notch Down to the context menu and used the same label in the menu bar; its icon is a bottom-dock symbol. The live context menu exposed the new action, and clicking it returned the saved anchor to bottom center (x = 756, y = 20 with the Dock hidden) and restored automatic Dock following.
+- Fixed a fast drag losing its first movement and enlarged the invisible resting grab area while retaining the 40-by-8-point dash. Live drags moved the notch from bottom center to the left edge (22, 525), then back to the right edge (1490, 525), preserving the vertical orientation. The right-side position was restored after testing.
+- Reproduced a 44-point gap between the right-side controls and native settings popover. Merely changing the positioning rectangle did not change that gap. Explicitly align the popover window after presentation and content resizing. Build 18 measured an 8-point gap: settings frame x = 1165, width = 302, controls x = 1475. The same gap remained after More expanded the settings height from 312 to 393 points. This matches the context menu spacing.
+
+
+## Consistent icon appearance and search registration (build 12, September 20)
+
+- Both default and dark appearances now use the pink background with a flat black eyelash. The native background treatment is retained. Exported light and dark PNG pixel data match.
+- Spotlight was indexing 12 temporary build copies alongside the output and installed apps. An old output registration still described build 10 without icon metadata. The icon file in the installed bundle itself rendered correctly.
+- Unregistered and archived the temporary copies, preserved the previous installed app, and installed a clean build 12 in Applications. Refreshed its Launch Services registration and Spotlight metadata. A bundle-identifier search now returns only `/Applications/QuietGlass.app`.
+- The default intermediate build now lives in `Build.noindex`; the distribution zip remains `QuietGlass.zip`. This keeps future development output from competing with the installed app in Spotlight.
+- macOS's own file-icon API resolves the installed app to the pink eyelash icon. The installed bundle passes strict signature verification, and the rebuilt app launches to its notch. Plist validation, shell syntax, and whitespace checks passed. These checks cover icon packaging and registration, not a new AirPods motion test.
+
+## App icon (build 11, September 20)
+
+- Added an editable Icon Composer document with an outlined SVG eyelash. The pink background/black eyelash default appearance and black background/pink eyelash dark appearance use the shortcut label's exact sRGB base color (0.94, 0.68, 0.91). Native Liquid Glass remains on the background only; the eyelash has effects, translucency, and shadow disabled.
+- Inspected both rendered appearances and the native Icon Composer preview. The oversized artwork retains its deliberate crop at the right edge.
+- The release build compiles the document with Apple's asset compiler and packages `Assets.car`, the legacy `QuietGlass.icns`, and the generated bundle icon metadata. Asset inspection confirms separate Aqua and Dark Aqua icon stacks and vector artwork.
+- Release build, plist validation, shell syntax, and whitespace checks passed. The installed app passed strict code-signature verification. Icon changes do not modify tracking or blur logic; no new motion tests were added for these assets.
+
+## Timed preview restoration (build 10)
+
+- Restored the five-second preview expiry. Expiry fades the overlay and resumes normal head tracking when enabled. Clicking Clear preview, pressing Escape, pausing, recentering, sleeping, or losing screen permission cancels the pending expiry and clears immediately.
+- Updated the preview status, controls hint, menu bar item, and setup documentation to describe the timer. The active preview controls still allow early dismissal.
+- The release build, plist validation, whitespace checks, and strict signature verification passed. The build was installed in Applications, and screen access was refreshed for its changed local signature.
+- Invoked preview with tracking paused and subsequently observed the idle notch. The UI inspection tool intermittently failed while capturing the overlay, so exact visual expiry timing was not measured. The existing motion-response logic is unchanged; no additional tests were added for restoring this timer.
+
 ## Build 9 checks
 
 - All 14 automated response tests passed with no failures.

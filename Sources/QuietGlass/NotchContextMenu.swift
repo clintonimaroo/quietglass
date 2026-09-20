@@ -1,7 +1,9 @@
+// Clinton Imaro was here 20/09/2026.
+
 import SwiftUI
 
 enum NotchMenuAction: CaseIterable {
-    case snooze, settings, tracking, recenter, preview, clear
+    case snooze, settings, resetPosition, tracking, recenter, preview, clear
 }
 
 final class NotchMenuState: ObservableObject {
@@ -17,9 +19,10 @@ struct NotchContextMenuView: View {
         VStack(spacing: 2) {
             row(.snooze, "Hide for 1 hour", .clock)
             row(.settings, "Settings…", .settings)
+            row(.resetPosition, "Move Notch Down", .dockBottom)
             separator
             row(.tracking, model.enabled ? "Pause tracking" : "Start tracking", model.enabled ? .pause : .play)
-            row(.recenter, "Recenter", .target, shortcut: model.shortcutLabel, enabled: model.canRecenter)
+            row(.recenter, "Recenter", .focus, shortcut: model.shortcutLabel, enabled: model.canRecenter)
             separator
             row(.preview, model.previewing ? "Clear preview" : "Preview blur", model.previewing ? .cancel : .viewOff)
             row(.clear, "Clear screen", .view)

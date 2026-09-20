@@ -1,14 +1,16 @@
+// Clinton Imaro was here 20/09/2026.
+
 import AppKit
-import CoreImage
 import ScreenCaptureKit
 import ShieldCore
+import OSLog
 
-private final class ShieldPanel: NSPanel {
+final class ShieldPanel: NSPanel {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 }
 
-private final class ShieldSurface {
+final class ShieldSurface {
     let panel: ShieldPanel
     private let imageLayer = CALayer()
     private let gradient = CAGradientLayer()
@@ -18,7 +20,8 @@ private final class ShieldSurface {
         panel = ShieldPanel(contentRect: screen.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.title = "QuietGlass Blur"
         panel.level = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue + 1)
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+        panel.collectionBehavior = [.canJoinAllSpaces, .canJoinAllApplications, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+        panel.animationBehavior = .none
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false
@@ -34,8 +37,22 @@ private final class ShieldSurface {
         panel.contentView = view
     }
 
+    func resize(to frame: NSRect) {
+        guard panel.frame != frame else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        panel.setFrame(frame, display: true)
+        imageLayer.frame = NSRect(origin: .zero, size: frame.size)
+        gradient.frame = imageLayer.bounds
+        CATransaction.commit()
+    }
+
+    func keepVisible() {
+        guard hasImage else { return }
+        panel.orderFrontRegardless()
+    }
+
     func update(coverage: Double, direction: ShieldDirection) {
-        // Never present a colored backing while waiting for a usable blurred image.
         guard hasImage else { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -67,26 +84,13 @@ private final class ShieldSurface {
     }
 }
 
-private actor BlurRenderer {
-    private let context = CIContext(options: [.cacheIntermediates: false])
-    func render(_ image: CGImage, radius: Double) -> CGImage? {
-        autoreleasepool {
-            let input = CIImage(cgImage: image)
-            let output = input.clampedToExtent()
-                .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: radius])
-                .cropped(to: input.extent)
-            // Preserve the original image colors: no white veil, tint, or saturation shift.
-            return context.createCGImage(output, from: input.extent)
-        }
-    }
-}
-
 @MainActor
 final class ShieldOverlay {
     var onClear: (() -> Void)?
     var onCaptureStatus: ((String?) -> Void)?
+    var onPermissionDenied: (() -> Void)?
     private var surfaces: [CGDirectDisplayID: ShieldSurface] = [:]
-    private let renderer = BlurRenderer()
+    private var captures: [CGDirectDisplayID: DisplayCapture] = [:]
     private var captureTask: Task<Void, Never>?
     private var pendingFade: Task<Void, Never>?
     private var refreshTimer: Timer?
@@ -99,21 +103,28 @@ final class ShieldOverlay {
     private var lastFrameTime = 0.0
     private var direction: ShieldDirection = .left
     private var blurRadius = 28.0
+    private let logger = Logger(subsystem: "local.clinton.QuietGlass", category: "Blur")
+    var isCapturing: Bool { !captures.isEmpty }
 
     func show(coverage: Double, direction: ShieldDirection, blurRadius: Double) {
         guard coverage > 0.001 else { fadeOut(); return }
         pendingFade?.cancel(); pendingFade = nil
-        if surfaces.isEmpty { rebuild() }
+        if surfaces.isEmpty { reconcileScreens() }
         targetCoverage = max(0, min(1, coverage))
-        self.blurRadius = blurRadius
+        if self.blurRadius != blurRadius {
+            self.blurRadius = blurRadius
+            for capture in captures.values { capture.setRadius(blurRadius) }
+        }
         if !active {
-            // Keep the same sweep edge until the screen is fully clear. A small
-            // change in the dominant head axis must not move the mask instantly.
             self.direction = direction
             active = true
             capture()
-            refreshTimer = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in
-                Task { @MainActor in self?.capture() }
+            refreshTimer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.restoreVisibility()
+                    self.capture()
+                }
             }
             RunLoop.main.add(refreshTimer!, forMode: .common)
         }
@@ -122,8 +133,6 @@ final class ShieldOverlay {
 
     func fadeOut() {
         guard active, targetCoverage > 0, pendingFade == nil else { return }
-        // Ignore a brief clear sample while the user is still looking away.
-        // Repeated clear samples share this deadline instead of postponing it.
         pendingFade = Task { [weak self] in
             do { try await Task.sleep(nanoseconds: 120_000_000) } catch { return }
             guard let self else { return }
@@ -166,6 +175,8 @@ final class ShieldOverlay {
         animationTimer?.invalidate(); animationTimer = nil
         refreshTimer?.invalidate(); refreshTimer = nil
         captureTask?.cancel(); captureTask = nil
+        for capture in captures.values { capture.stop() }
+        captures.removeAll()
         displayedCoverage = 0
         targetCoverage = 0
         transition.reset()
@@ -173,38 +184,57 @@ final class ShieldOverlay {
         if wasActive { onClear?() }
     }
 
-    func rebuild() {
-        clear()
-        for surface in surfaces.values { surface.panel.close() }
-        surfaces.removeAll()
+    func reconcileScreens() {
+        var currentDisplays = Set<CGDirectDisplayID>()
         for screen in NSScreen.screens {
             guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { continue }
-            surfaces[number.uint32Value] = ShieldSurface(screen: screen)
+            let id = number.uint32Value
+            currentDisplays.insert(id)
+            if let surface = surfaces[id] {
+                if surface.panel.frame != screen.frame {
+                    surface.resize(to: screen.frame)
+                    captures.removeValue(forKey: id)?.stop()
+                }
+            } else { surfaces[id] = ShieldSurface(screen: screen) }
+        }
+        for id in Set(surfaces.keys).subtracting(currentDisplays) {
+            captures.removeValue(forKey: id)?.stop()
+            surfaces.removeValue(forKey: id)?.panel.close()
+        }
+        restoreVisibility()
+        capture()
+    }
+
+    func activeSpaceChanged() {
+        guard active else { return }
+        logger.info("Space changed; retaining blur coverage and display surfaces")
+        reconcileScreens()
+    }
+
+    private func restoreVisibility() {
+        guard active else { return }
+        for surface in surfaces.values {
+            surface.update(coverage: displayedCoverage, direction: direction)
+            surface.keepVisible()
         }
     }
 
     private func capture() {
-        guard active, targetCoverage > 0, captureTask == nil else { return }
-        guard CGPreflightScreenCaptureAccess() else {
-            onCaptureStatus?("Allow Screen Recording to enable blur.")
-            clear()
-            return
-        }
+        guard active, targetCoverage > 0, captureTask == nil,
+              !Set(surfaces.keys).subtracting(captures.keys).isEmpty else { return }
         let token = generation
         let radius = blurRadius
         captureTask = Task { [weak self] in
             guard let self else { return }
             defer { if self.generation == token { self.captureTask = nil } }
             do {
-                let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+                let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
                 guard !Task.isCancelled, self.active, self.generation == token else { return }
                 let ownApps = content.applications.filter { $0.processID == ProcessInfo.processInfo.processIdentifier }
-                guard !ownApps.isEmpty else {
-                    self.onCaptureStatus?("Blur is waiting for the display. Try the preview again.")
-                    return
-                }
+                guard !ownApps.isEmpty else { return }
                 for display in content.displays {
-                    guard self.surfaces[display.displayID] != nil else { continue }
+                    let id = display.displayID
+                    guard self.surfaces[id] != nil, self.captures[id] == nil else { continue }
                     guard !Task.isCancelled, self.active, self.generation == token else { return }
                     let filter = SCContentFilter(display: display, excludingApplications: ownApps, exceptingWindows: [])
                     if #available(macOS 14.2, *) { filter.includeMenuBar = true }
@@ -214,22 +244,51 @@ final class ShieldOverlay {
                     config.showsCursor = false
                     config.scalesToFit = true
                     config.preservesAspectRatio = true
-                    let source = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
-                    guard !Task.isCancelled, self.active, self.generation == token else { return }
-                    let blurred = await self.renderer.render(source, radius: radius)
-                    guard !Task.isCancelled, self.active, self.generation == token else { return }
-                    if let blurred {
-                        self.surfaces[display.displayID]?.setImage(blurred)
-                        self.startAnimation()
+                    config.minimumFrameInterval = CMTime(value: 1, timescale: 30)
+                    config.queueDepth = 3
+                    config.capturesAudio = false
+                    config.pixelFormat = kCVPixelFormatType_32BGRA
+                    let sessionID = UUID()
+                    let capture = DisplayCapture(id: sessionID, filter: filter, configuration: config, radius: radius,
+                        onFrame: { [weak self] image in
+                            guard let self, self.active, self.generation == token,
+                                  self.captures[id]?.id == sessionID else { return }
+                            self.surfaces[id]?.setImage(image)
+                            self.surfaces[id]?.update(coverage: self.displayedCoverage, direction: self.direction)
+                            if self.displayedCoverage != self.targetCoverage { self.startAnimation() }
+                            self.onCaptureStatus?(nil)
+                        }, onFailure: { [weak self] error in
+                            guard let self, self.generation == token,
+                                  self.captures[id]?.id == sessionID else { return }
+                            self.captures.removeValue(forKey: id)?.stop()
+                            self.captureFailed(error)
+                        })
+                    self.captures[id] = capture
+                    do { try await capture.start() }
+                    catch {
+                        guard self.generation == token else { return }
+                        self.captures.removeValue(forKey: id)?.stop()
+                        throw error
                     }
+                    guard !Task.isCancelled, self.active, self.generation == token,
+                          self.captures[id]?.id == sessionID else { capture.stop(); return }
                 }
                 self.onCaptureStatus?(nil)
             } catch {
                 guard !Task.isCancelled, self.generation == token else { return }
-                self.onCaptureStatus?("Blur unavailable: \(error.localizedDescription)")
-                // A previously blurred image stays in place while capture retries.
-                // Before the first good frame the display stays clear, never gray or white.
+                self.captureFailed(error)
             }
+        }
+    }
+
+    private func captureFailed(_ error: Error) {
+        let failure = error as NSError
+        logger.error("Capture failure \(failure.domain, privacy: .public):\(failure.code)")
+        if failure.domain == SCStreamErrorDomain, failure.code == SCStreamError.Code.userDeclined.rawValue {
+            clear()
+            onPermissionDenied?()
+        } else {
+            onCaptureStatus?("Reconnecting screen blur…")
         }
     }
 }

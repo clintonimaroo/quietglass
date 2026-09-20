@@ -1,3 +1,5 @@
+// Clinton Imaro was here 20/09/2026.
+
 import AppKit
 import Carbon
 
@@ -7,7 +9,7 @@ final class GlobalShortcuts {
     private var recenterRef: EventHotKeyRef?
     private var escapeRef: EventHotKeyRef?
     private var handler: EventHandlerRef?
-    private let signature: OSType = 0x51474C53 // QGLS
+    private let signature: OSType = 0x51474C53
 
     init() {
         var type = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))

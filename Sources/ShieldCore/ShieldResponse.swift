@@ -1,3 +1,5 @@
+// Clinton Imaro was here 20/09/2026.
+
 import Foundation
 import simd
 
@@ -12,8 +14,6 @@ public struct HeadOffset: Equatable {
         self.angle = angle ?? acos(max(-1, min(1, cos(yaw * .pi / 180) * cos(pitch * .pi / 180)))) * 180 / .pi
     }
 
-    /// Apple headphone coordinates: +Z up, +Y forward, +X right.
-    /// Comparing the forward vectors ignores a sideways head tilt and avoids Euler wraparound.
     public static func between(center: simd_quatd, current: simd_quatd) -> HeadOffset {
         let relative = simd_normalize(center.inverse * current)
         let forward = relative.act(SIMD3<Double>(0, 1, 0))
@@ -50,8 +50,6 @@ public struct ShieldResponse {
             guard angle > threshold else { return 0 }
             isCovering = true
         }
-        // Separate the entry and exit angles so normal sensor jitter does not
-        // repeatedly tear down and restart capture at the comfort boundary.
         if angle <= threshold - min(3, threshold / 2) {
             isCovering = false
             return 0
@@ -70,7 +68,6 @@ public enum ShieldDirection: String, CaseIterable {
 }
 
 public enum GlassMask {
-    /// A wide, smooth feather carries the frost across the display.
     public static func opacity(position: Double, coverage: Double) -> Double {
         guard coverage.isFinite, position.isFinite else { return 0 }
         let progress = max(0, min(1, coverage))
@@ -87,8 +84,6 @@ public struct GlassTransition {
     private var velocity = 0.0
     public init() {}
 
-    /// A critically damped spring remains continuous when head motion reverses.
-    /// Its response is independent of the display's refresh rate.
     public mutating func advance(to requestedTarget: Double, elapsed: Double) -> Double {
         guard requestedTarget.isFinite, elapsed.isFinite else { return value }
         let target = max(0, min(1, requestedTarget))

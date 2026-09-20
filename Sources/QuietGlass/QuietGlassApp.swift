@@ -1,3 +1,5 @@
+// Clinton Imaro was here 20/09/2026.
+
 import AppKit
 import Combine
 
@@ -54,7 +56,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    func menuWillOpen(_ menu: NSMenu) { buildMenu(menu) }
+    func menuNeedsUpdate(_ menu: NSMenu) { buildMenu(menu) }
 
     private func buildMenu(_ menu: NSMenu) {
         menu.removeAllItems()
@@ -64,12 +66,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(.separator())
         item("Controls…", #selector(showControls), in: menu)
         item(notch.isVisible ? "Hide Notch" : "Show Notch", #selector(toggleNotch), in: menu)
-        item("Move Notch to Bottom Center", #selector(resetNotch), in: menu)
+        item("Move Notch Down", #selector(resetNotch), in: menu)
         menu.addItem(.separator())
         item(model.enabled ? "Pause Head Tracking" : "Start Head Tracking", #selector(toggleTracking), in: menu)
         let center = item("Center My Gaze    \(model.shortcutLabel)", #selector(recenter), in: menu)
         center.isEnabled = model.canRecenter
-        item(model.previewing ? "Clear Preview" : "Preview Blur", #selector(preview), in: menu)
+        item(model.previewing ? "Clear Preview" : "Preview Blur for 5 Seconds", #selector(preview), in: menu)
         item("Clear Screen", #selector(clear), in: menu)
         menu.addItem(.separator())
         item("Quit QuietGlass", #selector(quit), in: menu, key: "q")
