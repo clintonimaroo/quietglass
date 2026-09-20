@@ -6,36 +6,52 @@ private final class NotchPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
-/// A small, nonactivating utility panel. The desktop remains the main workspace.
+private final class HintPanel: NSPanel {
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
+}
+
+private final class NotchState: ObservableObject {
+    @Published var expanded = false
+}
+
+private enum NotchAction { case tracking, recenter, preview }
+
 @MainActor
-final class NotchBarController: NSObject, NSWindowDelegate, NSPopoverDelegate {
+final class NotchBarController: NSObject, NSWindowDelegate, NSPopoverDelegate, NSMenuDelegate {
     private let model: AppModel
+    private let state = NotchState()
     private let panel: NotchPanel
+    private let hintPanel: HintPanel
     private let popover = NSPopover()
     private var screenObserver: NSObjectProtocol?
-    private let frameName = "QuietGlassFloatingBar"
+    private var contextMonitor: Any?
+    private var collapseTask: Task<Void, Never>?
+    private var snoozeTimer: Timer?
+    private var anchor = NSPoint.zero
+    private var dragOrigin: (mouse: NSPoint, anchor: NSPoint)?
+    private var lastDragEnded = -Double.infinity
+    private var contextMenuOpen = false
     var isVisible: Bool { panel.isVisible }
 
     init(model: AppModel) {
         self.model = model
-        panel = NotchPanel(contentRect: NSRect(x: 0, y: 0, width: 154, height: 34),
+        panel = NotchPanel(contentRect: NSRect(x: 0, y: 0, width: 44, height: 12),
                            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        hintPanel = HintPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         super.init()
-        panel.title = "QuietGlass"
-        panel.isFloatingPanel = true
-        panel.becomesKeyOnlyIfNeeded = true
-        panel.isReleasedWhenClosed = false
-        panel.hidesOnDeactivate = false
-        panel.isOpaque = false
-        panel.backgroundColor = .clear
-        panel.hasShadow = true
-        panel.appearance = NSAppearance(named: .darkAqua)
-        panel.level = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue + 2)
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
+        configure(panel, title: "QuietGlass")
+        configure(hintPanel, title: "QuietGlass hint")
+        hintPanel.ignoresMouseEvents = true
+        hintPanel.level = NSWindow.Level(rawValue: panel.level.rawValue + 1)
+        panel.appearance = NSAppearance(named: .aqua)
         panel.delegate = self
-        panel.contentView = NSHostingView(rootView: NotchBarView(model: model, showControls: { [weak self] in
-            self?.toggleControls()
-        }))
+        panel.contentView = NSHostingView(rootView: NotchBarView(
+            model: model, state: state,
+            hover: { [weak self] in self?.hover($0) },
+            hint: { [weak self] in self?.showHint($0) },
+            action: { [weak self] in self?.perform($0) },
+            drag: { [weak self] in self?.drag(ended: $0) }))
 
         popover.behavior = .transient
         popover.delegate = self
@@ -45,170 +61,325 @@ final class NotchBarController: NSObject, NSWindowDelegate, NSPopoverDelegate {
             model: model, close: { [weak self] in self?.closeControls() },
             preview: { [weak self] in self?.preview() }))
 
-        if !panel.setFrameUsingName(frameName) { resetPosition() }
-        constrainToScreen()
+        let preferences = UserDefaults.standard
+        if preferences.object(forKey: "notchAnchorX") != nil {
+            anchor = NSPoint(x: preferences.double(forKey: "notchAnchorX"), y: preferences.double(forKey: "notchAnchorY"))
+            constrainToScreen()
+        } else { resetPosition() }
         screenObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in self?.constrainToScreen() }
+        ) { [weak self] _ in Task { @MainActor in self?.constrainToScreen() } }
+        contextMonitor = NSEvent.addLocalMonitorForEvents(matching: .rightMouseDown) { [weak self] event in
+            guard let self, event.window === self.panel else { return event }
+            self.showContextMenu(event)
+            return nil
         }
     }
 
-    func show() { panel.orderFrontRegardless() }
+    private func configure(_ window: NSPanel, title: String) {
+        window.title = title
+        window.isFloatingPanel = true
+        window.becomesKeyOnlyIfNeeded = true
+        window.isReleasedWhenClosed = false
+        window.hidesOnDeactivate = false
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.hasShadow = false
+        window.level = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue + 2)
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
+    }
+
+    func show() {
+        snoozeTimer?.invalidate(); snoozeTimer = nil
+        panel.orderFrontRegardless()
+    }
 
     func toggleVisibility() {
-        if panel.isVisible { closeControls(); panel.orderOut(nil) }
-        else { show() }
+        if panel.isVisible { hide() } else { show() }
+    }
+
+    private func hide() {
+        closeControls()
+        collapseTask?.cancel()
+        showHint(nil)
+        setExpanded(false)
+        panel.orderOut(nil)
+    }
+
+    private func hover(_ entered: Bool) {
+        collapseTask?.cancel()
+        if entered { setExpanded(true) }
+        else { scheduleCollapse() }
+    }
+
+    private func scheduleCollapse() {
+        collapseTask?.cancel()
+        collapseTask = Task { [weak self] in
+            do { try await Task.sleep(nanoseconds: 280_000_000) } catch { return }
+            guard let self, !self.popover.isShown, !self.contextMenuOpen, self.dragOrigin == nil,
+                  !self.panel.frame.contains(NSEvent.mouseLocation) else { return }
+            self.showHint(nil)
+            self.setExpanded(false)
+        }
+    }
+
+    private func setExpanded(_ expanded: Bool) {
+        guard state.expanded != expanded else { return }
+        let animation: Animation? = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : .smooth(duration: 0.2)
+        withAnimation(animation) { state.expanded = expanded }
+        layoutPanel()
+    }
+
+    private func layoutPanel() {
+        // The primary button grows around the resting dash; the other buttons open to its right.
+        let size = state.expanded ? NSSize(width: 116, height: 30) : NSSize(width: 44, height: 12)
+        let primaryCenter: CGFloat = state.expanded ? 24 : 22
+        panel.setFrame(NSRect(x: anchor.x - primaryCenter, y: anchor.y - size.height / 2,
+                              width: size.width, height: size.height), display: true)
+    }
+
+    private func perform(_ action: NotchAction) {
+        guard ProcessInfo.processInfo.systemUptime - lastDragEnded > 0.2 else { return }
+        switch action {
+        case .tracking:
+            if model.previewing { model.dismissShield() }
+            else if model.enabled { model.setEnabled(false) }
+            else if !model.screenPermission || model.status == "Motion permission needed" { showControls() }
+            else { model.setEnabled(true) }
+        case .recenter:
+            if model.canRecenter { model.recenter() } else { showControls() }
+        case .preview:
+            if !model.screenPermission { showControls() } else { preview() }
+        }
+        showHint(action)
+    }
+
+    private func drag(ended: Bool) {
+        let mouse = NSEvent.mouseLocation
+        if let origin = dragOrigin {
+            anchor = NSPoint(x: origin.anchor.x + mouse.x - origin.mouse.x, y: origin.anchor.y + mouse.y - origin.mouse.y)
+            layoutPanel()
+        } else if !ended {
+            dragOrigin = (mouse, anchor)
+            showHint(nil)
+        }
+        if ended {
+            dragOrigin = nil
+            lastDragEnded = ProcessInfo.processInfo.systemUptime
+            constrainToScreen()
+            savePosition()
+            scheduleCollapse()
+        }
+    }
+
+    private func showHint(_ action: NotchAction?) {
+        guard let action, state.expanded, !popover.isShown, !contextMenuOpen, dragOrigin == nil else {
+            hintPanel.orderOut(nil)
+            return
+        }
+        let view = NSHostingView(rootView: NotchHintView(model: model, action: action))
+        let size = view.fittingSize
+        hintPanel.contentView = view
+        let center: CGFloat = action == .tracking ? 24 : action == .recenter ? 67 : 101
+        var x = panel.frame.minX + center - size.width / 2
+        let visible = panel.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? .zero
+        x = min(max(x, visible.minX + 8), visible.maxX - size.width - 8)
+        let y = panel.frame.maxY + 5 + size.height <= visible.maxY
+            ? panel.frame.maxY + 5 : panel.frame.minY - size.height - 5
+        hintPanel.setFrame(NSRect(x: x, y: y, width: size.width, height: size.height), display: true)
+        hintPanel.orderFrontRegardless()
     }
 
     func showControls() {
         show()
+        setExpanded(true)
+        showHint(nil)
         guard !popover.isShown, let content = panel.contentView else { return }
         popover.animates = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         popover.show(relativeTo: content.bounds, of: content, preferredEdge: .maxY)
-        popover.contentViewController?.view.window?.level = panel.level
-    }
-
-    private func toggleControls() {
-        if popover.isShown { closeControls() } else { showControls() }
+        popover.contentViewController?.view.window?.level = NSWindow.Level(rawValue: panel.level.rawValue + 1)
     }
 
     func closeControls() { popover.performClose(nil) }
 
     func preview() {
         closeControls()
+        showHint(nil)
         if model.previewing { model.dismissShield() } else { model.previewShield() }
     }
 
     func resetPosition() {
         closeControls()
         guard let screen = panel.screen ?? NSScreen.main ?? NSScreen.screens.first else { return }
-        let visible = screen.visibleFrame
-        panel.setFrameOrigin(NSPoint(x: visible.midX - panel.frame.width / 2, y: visible.minY + 12))
-        panel.saveFrame(usingName: frameName)
+        anchor = NSPoint(x: screen.visibleFrame.midX, y: screen.visibleFrame.minY + 23)
+        layoutPanel()
+        savePosition()
     }
 
     private func constrainToScreen() {
         closeControls()
-        let frame = panel.frame
-        guard let screen = NSScreen.screens.max(by: {
-            $0.visibleFrame.intersection(frame).area < $1.visibleFrame.intersection(frame).area
-        }) else { return }
-        let visible = screen.visibleFrame.insetBy(dx: 8, dy: 8)
-        if !visible.intersects(frame) { resetPosition(); return }
-        panel.setFrameOrigin(NSPoint(
-            x: min(max(frame.minX, visible.minX), visible.maxX - frame.width),
-            y: min(max(frame.minY, visible.minY), visible.maxY - frame.height)))
+        guard let screen = NSScreen.screens.first(where: { $0.visibleFrame.contains(anchor) }) else {
+            resetPosition(); return
+        }
+        let visible = screen.visibleFrame.insetBy(dx: 10, dy: 10)
+        anchor.x = min(max(anchor.x, visible.minX + 24), visible.maxX - 92)
+        anchor.y = min(max(anchor.y, visible.minY + 15), visible.maxY - 15)
+        layoutPanel()
     }
 
-    func windowDidMove(_ notification: Notification) { panel.saveFrame(usingName: frameName) }
-    func popoverDidClose(_ notification: Notification) { model.recordingShortcut = false }
+    private func savePosition() {
+        UserDefaults.standard.set(anchor.x, forKey: "notchAnchorX")
+        UserDefaults.standard.set(anchor.y, forKey: "notchAnchorY")
+    }
+
+    private func showContextMenu(_ event: NSEvent) {
+        guard let content = panel.contentView else { return }
+        closeControls()
+        showHint(nil)
+        setExpanded(true)
+        let menu = NSMenu()
+        menu.delegate = self
+        menuItem("Hide for 1 hour", icon: .clock, action: #selector(snooze), in: menu)
+        menuItem("Settings…", icon: .settings, action: #selector(openSettings), in: menu)
+        menu.addItem(.separator())
+        menuItem(model.enabled ? "Pause tracking" : "Start tracking", icon: model.enabled ? .pause : .play, action: #selector(toggleTracking), in: menu)
+        let center = menuItem("Recenter    \(model.shortcutLabel)", icon: .target, action: #selector(recenter), in: menu)
+        center.isEnabled = model.canRecenter
+        menu.addItem(.separator())
+        menuItem("Preview blur", icon: .viewOff, action: #selector(previewFromMenu), in: menu)
+        menuItem("Clear screen", icon: .view, action: #selector(clear), in: menu)
+        NSMenu.popUpContextMenu(menu, with: event, for: content)
+    }
+
+    @discardableResult private func menuItem(_ title: String, icon: HugeIcon, action: Selector, in menu: NSMenu) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        item.image = icon.image(size: 17)
+        menu.addItem(item)
+        return item
+    }
+
+    func menuWillOpen(_ menu: NSMenu) { contextMenuOpen = true; collapseTask?.cancel() }
+    func menuDidClose(_ menu: NSMenu) { contextMenuOpen = false; scheduleCollapse() }
+    func popoverDidClose(_ notification: Notification) { model.recordingShortcut = false; scheduleCollapse() }
+
+    @objc private func openSettings() { showControls() }
+    @objc private func toggleTracking() { model.setEnabled(!model.enabled) }
+    @objc private func recenter() { model.recenter() }
+    @objc private func previewFromMenu() { perform(.preview) }
+    @objc private func clear() { model.dismissShield() }
+    @objc private func snooze() {
+        hide()
+        snoozeTimer?.invalidate()
+        snoozeTimer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: false) { [weak self] _ in
+            Task { @MainActor in self?.show() }
+        }
+    }
 
     func shutdown() {
-        closeControls()
+        hide()
+        snoozeTimer?.invalidate()
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
+        if let contextMonitor { NSEvent.removeMonitor(contextMonitor) }
+        hintPanel.close()
         panel.close()
     }
 }
 
-private extension NSRect {
-    var area: CGFloat { isNull ? 0 : width * height }
-}
-
 private struct NotchBarView: View {
     @ObservedObject var model: AppModel
-    let showControls: () -> Void
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @ObservedObject var state: NotchState
+    let hover: (Bool) -> Void
+    let hint: (NotchAction?) -> Void
+    let action: (NotchAction) -> Void
+    let drag: (Bool) -> Void
 
     var body: some View {
-        HStack(spacing: 0) {
-            Button {
-                if model.previewing { model.dismissShield() }
-                else { model.setEnabled(!model.enabled) }
-            } label: {
-                HugeIconView(icon: model.previewing ? .cancel : model.enabled ? .pause : .play, size: 15)
-                    .foregroundStyle(model.enabled || model.previewing ? .white : .white.opacity(0.7))
-                    .frame(width: 31, height: 32)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(model.previewing ? "Clear preview" : model.enabled ? "Pause head tracking" : "Start head tracking")
-            .help(model.previewing ? "Clear preview" : model.enabled ? "Pause head tracking" : "Start head tracking")
-
-            Rectangle().fill(.white.opacity(0.13)).frame(width: 1, height: 13)
-
-            Button(action: showControls) {
-                HStack(spacing: 7) {
-                    HugeIconView(icon: model.coverage > 0 ? .viewOff : .view, size: 15)
-                        .foregroundStyle(indicatorColor)
-                    Text(barLabel).font(.system(size: 10.5, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.85))
-                        .lineLimit(1)
-                    Spacer(minLength: 0)
+        Group {
+            if state.expanded {
+                HStack(spacing: 4) {
+                    control(.tracking, icon: model.previewing ? .cancel : model.enabled ? .pause : .view, width: 48)
+                    control(.recenter, icon: .target, width: 30)
+                    control(.preview, icon: .viewOff, width: 30)
                 }
-                .padding(.leading, 10)
-                .frame(width: 101, height: 32)
-                .contentShape(Rectangle())
+                .transition(.opacity.combined(with: .scale(scale: 0.88, anchor: .leading)))
+            } else {
+                Capsule()
+                    .fill(Color.black.opacity(0.58))
+                    .overlay(Capsule().strokeBorder(.white.opacity(0.55), lineWidth: 0.8))
+                    .frame(width: 40, height: 8).padding(2)
+                    .contentShape(Rectangle())
+                    .onTapGesture { hover(true) }
+                    .accessibilityElement()
+                    .accessibilityLabel("QuietGlass notch")
+                    .accessibilityHint("Hover to reveal controls, or right-click for settings")
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityAction { hover(true) }
+                    .transition(.opacity)
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("QuietGlass controls, \(barLabel)")
-            .help("Open QuietGlass controls")
-
-            DragHandle().frame(width: 19, height: 32)
-                .help("Drag to move")
-                .accessibilityLabel("Drag to move QuietGlass")
         }
-        .frame(width: 152, height: 32)
-        .background {
-            Capsule().fill(Color(red: 0.065, green: 0.065, blue: 0.075))
-                .overlay(Capsule().fill(LinearGradient(colors: [.white.opacity(0.055), .clear], startPoint: .top, endPoint: .bottom)))
-        }
-        .overlay(Capsule().strokeBorder(.white.opacity(0.16), lineWidth: 0.7))
-        .clipShape(Capsule())
-        .padding(1)
-        .preferredColorScheme(.dark)
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: barLabel)
+        .fixedSize()
+        .onHover(perform: hover)
+        .simultaneousGesture(DragGesture(minimumDistance: 4)
+            .onChanged { _ in drag(false) }
+            .onEnded { _ in drag(true) })
     }
 
-    private var barLabel: String {
-        if !model.screenPermission || model.captureNotice != nil || model.status == "Motion permission needed" { return "Set up" }
-        if model.previewing { return "Preview" }
-        if !model.enabled { return "Paused" }
-        if !model.connected { return "AirPods" }
-        if !model.calibrated { return "Center" }
-        if model.coverage > 0 { return "Blurred" }
-        return "Ready"
+    private func control(_ item: NotchAction, icon: HugeIcon, width: CGFloat) -> some View {
+        Button { action(item) } label: {
+            HugeIconView(icon: icon, size: 18)
+                .foregroundStyle(.white)
+                .frame(width: width, height: 30)
+                .background(.black, in: Capsule())
+                .overlay(Capsule().strokeBorder(Color(white: 0.28), lineWidth: 1))
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label(item))
+        .onHover { hint($0 ? item : nil) }
     }
 
-    private var indicatorColor: Color {
-        if !model.screenPermission || model.captureNotice != nil || model.status == "Motion permission needed" { return .orange }
-        if model.coverage > 0 { return Color(red: 0.68, green: 0.64, blue: 1) }
-        if model.calibrated { return Color(red: 0.55, green: 0.87, blue: 0.74) }
-        return .white.opacity(0.5)
+    private func label(_ item: NotchAction) -> String {
+        switch item {
+        case .tracking:
+            if model.previewing { return "Clear preview" }
+            if model.enabled { return "Pause tracking" }
+            if !model.screenPermission || model.status == "Motion permission needed" { return "Set up screen blur" }
+            return "Start tracking"
+        case .recenter: return "Recenter"
+        case .preview: return "Preview blur"
+        }
     }
 }
 
-private struct DragHandle: NSViewRepresentable {
-    func makeNSView(context: Context) -> HandleView { HandleView() }
-    func updateNSView(_ view: HandleView, context: Context) {}
+private struct NotchHintView: View {
+    @ObservedObject var model: AppModel
+    let action: NotchAction
 
-    final class HandleView: NSView {
-        override func resetCursorRects() { addCursorRect(bounds, cursor: .openHand) }
-        override func mouseDown(with event: NSEvent) {
-            NSCursor.closedHand.push()
-            window?.performDrag(with: event)
-            NSCursor.pop()
-        }
-        override func draw(_ dirtyRect: NSRect) {
-            let image = HugeIcon.drag.image(size: 12)
-            image.isTemplate = false
-            let tinted = NSImage(size: image.size, flipped: false) { bounds in
-                image.draw(in: bounds)
-                NSColor.white.setFill()
-                bounds.fill(using: .sourceAtop)
-                return true
+    var body: some View {
+        HStack(spacing: 5) {
+            Text(label)
+            if action == .recenter {
+                Text(model.shortcutLabel).foregroundStyle(Color(red: 0.94, green: 0.68, blue: 0.91))
             }
-            tinted.draw(in: NSRect(x: 0, y: 10, width: 12, height: 12), from: .zero, operation: .sourceOver, fraction: 0.35)
+        }
+        .font(.system(size: 13))
+        .foregroundStyle(.white)
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .background(.black, in: Capsule())
+        .overlay(Capsule().strokeBorder(Color(white: 0.25), lineWidth: 0.7))
+        .fixedSize()
+    }
+
+    private var label: String {
+        switch action {
+        case .tracking:
+            if model.previewing { return "Clear preview" }
+            if model.enabled { return "Pause tracking" }
+            if !model.screenPermission || model.status == "Motion permission needed" { return "Set up screen blur" }
+            return "Start tracking"
+        case .recenter: return "Recenter"
+        case .preview: return "Preview blur"
         }
     }
 }

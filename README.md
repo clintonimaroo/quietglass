@@ -1,18 +1,18 @@
 # QuietGlass
 
-A tiny floating Mac notch that blurs your screen when you look away with AirPods. It keeps the desktop's colors and softens its details, with a feathered transition that follows your head movement.
+A tiny Mac notch that blurs your screen when you look away with AirPods. It keeps the desktop's colors and softens its details, with a feathered transition that follows your head movement.
 
 ## Start
 
 1. Build the app, or unzip `QuietGlass.zip` and move the app to Applications.
-2. Connect and wear compatible AirPods, then open QuietGlass. A small dark pill appears above the Dock.
-3. Click the play icon to start tracking. Click the eye/status area to open the compact controls.
-4. Allow Motion & Fitness and Screen Recording when prompted. Face the screen and click **Recenter**.
+2. Connect and wear compatible AirPods, then open QuietGlass. A thin 40 × 8-point dash appears above the Dock.
+3. Hover over the dash to reveal three black buttons: tracking, recenter, and blur preview. Hover a button to see its label.
+4. Right-click the notch and choose **Settings…** to allow Motion & Fitness and Screen Recording if needed. Start tracking, face the screen, and click **Recenter**.
 5. Look away to blur the screen; look back to clear it. **Preview blur** runs for five seconds without AirPods.
 
 **Escape** clears the blur immediately. The default recenter shortcut is **Control–Option–Command–C**, which also starts tracking if paused. Change it under **More** in the controls.
 
-Drag the handle at the right end to move the notch. Its position is remembered. The menu bar eye offers show/hide, position reset, controls, and quit. The app starts paused after launch and requires a new calibration. There is no main settings window.
+The notch returns to a quiet dash when the pointer leaves. Drag it to move it; its position is remembered. Right-click for **Hide for 1 hour**, **Settings…**, tracking, recenter, preview, and clear actions. The menu bar eye offers show/hide, position reset, controls, and quit. The app starts paused after launch and requires a new calibration. There is no main settings window.
 
 Requires macOS 14 or later and AirPods 3/4, AirPods Pro, or AirPods Max. At least one compatible earbud must be worn. Permission settings are managed by macOS; a rebuilt, locally signed app may require renewed approval and a relaunch.
 
@@ -33,7 +33,7 @@ ScreenCaptureKit captures display snapshots while blur is active, excluding Quie
 
 The app does not show a solid-color cover while capture is unavailable. Before the first usable frame, the desktop stays clear and the controls show the capture error; a previously blurred frame remains visible during a transient capture failure. Screen access is necessary for the blur to work.
 
-The floating panel stays above the blur and is clickable without replacing your current main window. The controls open only on demand. All app-owned icons use the free Hugeicons Stroke Rounded set; no SF Symbols are used.
+The floating panel stays above the blur and is clickable without replacing your current main window. The three hover buttons have black capsule backgrounds and floating labels. A native right-click menu provides the other actions; the settings popover opens only on demand. All app-owned icons use the free Hugeicons Stroke Rounded set; no SF Symbols are used.
 
 ## Build
 
