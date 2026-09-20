@@ -24,7 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         model = AppModel()
         notch = NotchBarController(model: model)
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        statusItem.button?.image = HugeIcon.view.image()
+        statusItem.button?.image = AppIcon.view.image()
         statusItem.button?.setAccessibilityLabel("QuietGlass")
         let menu = NSMenu()
         menu.autoenablesItems = false
@@ -32,7 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem.menu = menu
         buildMenu(menu)
         observation = model.$coverage.sink { [weak self] value in
-            self?.statusItem.button?.image = (value > 0 ? HugeIcon.viewOff : .view).image()
+            self?.statusItem.button?.image = (value > 0 ? AppIcon.viewOff : .view).image()
         }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self else { return event }
@@ -48,6 +48,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return event
         }
         notch.show()
+        if UserDefaults.standard.bool(forKey: "showControlsAfterRelaunch") {
+            UserDefaults.standard.removeObject(forKey: "showControlsAfterRelaunch")
+            notch.showControls()
+        }
     }
 
     func menuWillOpen(_ menu: NSMenu) { buildMenu(menu) }
@@ -65,7 +69,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         item(model.enabled ? "Pause Head Tracking" : "Start Head Tracking", #selector(toggleTracking), in: menu)
         let center = item("Center My Gaze    \(model.shortcutLabel)", #selector(recenter), in: menu)
         center.isEnabled = model.canRecenter
-        item("Preview Blur for 5 Seconds", #selector(preview), in: menu)
+        item(model.previewing ? "Clear Preview" : "Preview Blur", #selector(preview), in: menu)
         item("Clear Screen", #selector(clear), in: menu)
         menu.addItem(.separator())
         item("Quit QuietGlass", #selector(quit), in: menu, key: "q")

@@ -3,6 +3,52 @@ import simd
 @testable import ShieldCore
 
 final class ShieldResponseTests: XCTestCase {
+    func testSmallMovementsAroundTheTriggerDoNotCycleTheBlur() {
+        var response = ShieldResponse(comfort: 30)
+        XCTAssertEqual(response.coverage(angle: 29.9), 0)
+        for angle in [30.2, 29.8, 30.1, 29.9, 28.0, 27.1] {
+            XCTAssertGreaterThan(response.coverage(angle: angle), 0)
+        }
+        XCTAssertEqual(response.coverage(angle: 27), 0)
+        XCTAssertEqual(response.coverage(angle: 29.9), 0)
+        XCTAssertGreaterThan(response.coverage(angle: 30.2), 0)
+    }
+
+    func testRecenterAndEscapeClearTheTriggerHistory() {
+        var response = ShieldResponse()
+        _ = response.coverage(angle: 30)
+        response.recenter()
+        XCTAssertEqual(response.coverage(angle: 14), 0)
+        _ = response.coverage(angle: 30)
+        response.dismiss()
+        XCTAssertEqual(response.coverage(angle: 30), 0)
+        XCTAssertEqual(response.coverage(angle: 10), 0)
+        XCTAssertEqual(response.coverage(angle: 14), 0)
+    }
+
+    func testLowestTriggerStillClearsWithSmallResidualHeadMotion() {
+        var response = ShieldResponse(comfort: 2)
+        XCTAssertGreaterThan(response.coverage(angle: 3), 0)
+        XCTAssertEqual(response.coverage(angle: 0.5), 0)
+        XCTAssertEqual(response.coverage(angle: 1.9), 0)
+        response.dismiss()
+        XCTAssertEqual(response.coverage(angle: 0.5), 0)
+        XCTAssertFalse(response.dismissedUntilCentered)
+        XCTAssertGreaterThan(response.coverage(angle: 3), 0)
+    }
+
+    func testAFullBlurAndClearHaveAVisibleTransition() {
+        var motion = GlassTransition()
+        for _ in 0..<9 { _ = motion.advance(to: 1, elapsed: 1.0 / 60) }
+        XCTAssertGreaterThan(motion.value, 0.3)
+        XCTAssertLessThan(motion.value, 0.8)
+        for _ in 0..<60 { _ = motion.advance(to: 1, elapsed: 1.0 / 60) }
+        XCTAssertEqual(motion.value, 1)
+        for _ in 0..<9 { _ = motion.advance(to: 0, elapsed: 1.0 / 60) }
+        XCTAssertGreaterThan(motion.value, 0.2)
+        XCTAssertLessThan(motion.value, 0.7)
+    }
+
     func testGlassMotionDoesNotDependOnSixtyVersusOneTwentyHertz() {
         var sixty = GlassTransition()
         var oneTwenty = GlassTransition()

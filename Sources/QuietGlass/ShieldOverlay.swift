@@ -88,6 +88,7 @@ final class ShieldOverlay {
     private var surfaces: [CGDirectDisplayID: ShieldSurface] = [:]
     private let renderer = BlurRenderer()
     private var captureTask: Task<Void, Never>?
+    private var pendingFade: Task<Void, Never>?
     private var refreshTimer: Timer?
     private var animationTimer: Timer?
     private var generation = 0
@@ -101,11 +102,14 @@ final class ShieldOverlay {
 
     func show(coverage: Double, direction: ShieldDirection, blurRadius: Double) {
         guard coverage > 0.001 else { fadeOut(); return }
+        pendingFade?.cancel(); pendingFade = nil
         if surfaces.isEmpty { rebuild() }
         targetCoverage = max(0, min(1, coverage))
-        self.direction = direction
         self.blurRadius = blurRadius
         if !active {
+            // Keep the same sweep edge until the screen is fully clear. A small
+            // change in the dominant head axis must not move the mask instantly.
+            self.direction = direction
             active = true
             capture()
             refreshTimer = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in
@@ -117,10 +121,17 @@ final class ShieldOverlay {
     }
 
     func fadeOut() {
-        guard active else { return }
-        targetCoverage = 0
-        if displayedCoverage == 0 { clear() }
-        else { startAnimation() }
+        guard active, targetCoverage > 0, pendingFade == nil else { return }
+        // Ignore a brief clear sample while the user is still looking away.
+        // Repeated clear samples share this deadline instead of postponing it.
+        pendingFade = Task { [weak self] in
+            do { try await Task.sleep(nanoseconds: 120_000_000) } catch { return }
+            guard let self else { return }
+            self.pendingFade = nil
+            self.targetCoverage = 0
+            if self.displayedCoverage == 0 { self.clear() }
+            else { self.startAnimation() }
+        }
     }
 
     private func startAnimation() {
@@ -150,6 +161,7 @@ final class ShieldOverlay {
     func clear() {
         let wasActive = active
         active = false
+        pendingFade?.cancel(); pendingFade = nil
         generation += 1
         animationTimer?.invalidate(); animationTimer = nil
         refreshTimer?.invalidate(); refreshTimer = nil

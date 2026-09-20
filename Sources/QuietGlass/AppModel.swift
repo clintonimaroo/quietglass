@@ -16,6 +16,7 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
     @Published private(set) var detail = "Connect your AirPods to this Mac, then start head tracking."
     @Published private(set) var captureNotice: String?
     @Published private(set) var screenPermission = CGPreflightScreenCaptureAccess()
+    @Published private(set) var restarting = false
     @Published private(set) var previewing = false
     @Published private(set) var shortcutError: String?
     @Published var recordingShortcut = false
@@ -37,7 +38,6 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
     private var dismissedForLoss = false
     private var pendingCalibration = false
     private var timer: Timer?
-    private var previewEnd: Task<Void, Never>?
     private var observers: [NSObjectProtocol] = []
     private var keyCode: UInt32
     private var keyModifiers: UInt32
@@ -64,6 +64,9 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
         }
         observers.append(NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.overlay.rebuild(); self?.updateShield() }
+        })
+        observers.append(NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.refreshScreenPermission() }
         })
         observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.prepareForSleep() }
@@ -211,8 +214,7 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
         if value > 0.001 {
             guard screenPermission else {
                 clearOverlay()
-                status = "Enable screen blur"
-                captureNotice = "Allow Screen Recording to enable blur."
+                status = "Screen access needed"
                 return false
             }
             // Do not cover the desktop unless the emergency shortcut can be registered.
@@ -240,22 +242,12 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
         stopPreview()
         guard applyCoverage(1, direction: .right) else { return }
         previewing = true
-        status = "Preview ends in 5 seconds"
-        previewEnd = Task { [weak self] in
-            do { try await Task.sleep(nanoseconds: 5_000_000_000) } catch { return }
-            guard let self else { return }
-            self.stopPreview(immediate: false)
-            if self.enabled { self.updateShield() }
-            else { self.status = "Ready when you are" }
-        }
+        status = "Preview blur is on"
     }
 
-    private func stopPreview(immediate: Bool = true) {
-        previewEnd?.cancel()
-        previewEnd = nil
+    private func stopPreview() {
         previewing = false
-        if immediate { clearOverlay() }
-        else { overlay.fadeOut(); coverage = 0 }
+        clearOverlay()
     }
 
     func openMotionSettings() {
@@ -264,9 +256,45 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
 
     func requestScreenPermission() {
         if !CGPreflightScreenCaptureAccess() { _ = CGRequestScreenCaptureAccess() }
-        screenPermission = CGPreflightScreenCaptureAccess()
+        refreshScreenPermission()
         if !screenPermission {
             NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")!)
+        }
+    }
+
+    func restartForScreenPermission() {
+        guard !restarting else { return }
+        restarting = true
+        stop()
+        UserDefaults.standard.set(true, forKey: "showControlsAfterRelaunch")
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.createsNewApplicationInstance = true
+        NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: configuration) { [weak self] application, error in
+            Task { @MainActor in
+                guard application != nil, error == nil else {
+                    UserDefaults.standard.removeObject(forKey: "showControlsAfterRelaunch")
+                    self?.restarting = false
+                    self?.captureNotice = "Could not restart QuietGlass. Quit and reopen the app."
+                    return
+                }
+                NSApplication.shared.terminate(nil)
+            }
+        }
+    }
+
+    private func refreshScreenPermission() {
+        let permission = CGPreflightScreenCaptureAccess()
+        guard permission != screenPermission else { return }
+        screenPermission = permission
+        // A warning from a failed preview must not survive a successful grant.
+        captureNotice = nil
+        if permission {
+            if enabled { updateShield() }
+            else { status = "Ready when you are" }
+        } else {
+            stopPreview()
+            clearOverlay()
+            status = "Screen access needed"
         }
     }
 
@@ -306,8 +334,7 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
     }
 
     private func heartbeat() {
-        let permission = CGPreflightScreenCaptureAccess()
-        if permission != screenPermission { screenPermission = permission }
+        refreshScreenPermission()
         guard enabled else { return }
         let auth = CMHeadphoneMotionManager.authorizationStatus()
         if auth == .denied || auth == .restricted {

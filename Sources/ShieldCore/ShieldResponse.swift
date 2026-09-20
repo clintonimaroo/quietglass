@@ -29,23 +29,34 @@ public struct ShieldResponse {
     public var comfort: Double = 15
     public var transition: Double = 18
     public private(set) var dismissedUntilCentered = false
+    private var isCovering = false
 
     public init(comfort: Double = 15, transition: Double = 18) {
         self.comfort = comfort
         self.transition = transition
     }
 
-    public mutating func dismiss() { dismissedUntilCentered = true }
-    public mutating func recenter() { dismissedUntilCentered = false }
+    public mutating func dismiss() { dismissedUntilCentered = true; isCovering = false }
+    public mutating func recenter() { dismissedUntilCentered = false; isCovering = false }
 
     public mutating func coverage(angle: Double) -> Double {
         guard angle.isFinite else { return dismissedUntilCentered ? 0 : 1 }
         let threshold = max(2, min(30, comfort))
         if dismissedUntilCentered {
-            if angle < max(0, threshold - 2) { dismissedUntilCentered = false }
+            if angle < threshold - min(2, threshold / 2) { dismissedUntilCentered = false }
             return 0
         }
-        return max(0, min(1, (angle - threshold) / max(5, min(30, transition))))
+        if !isCovering {
+            guard angle > threshold else { return 0 }
+            isCovering = true
+        }
+        // Separate the entry and exit angles so normal sensor jitter does not
+        // repeatedly tear down and restart capture at the comfort boundary.
+        if angle <= threshold - min(3, threshold / 2) {
+            isCovering = false
+            return 0
+        }
+        return max(0.01, min(1, (angle - threshold) / max(5, min(30, transition))))
     }
 }
 
@@ -82,7 +93,7 @@ public struct GlassTransition {
         guard requestedTarget.isFinite, elapsed.isFinite else { return value }
         let target = max(0, min(1, requestedTarget))
         let dt = max(0, min(1.0 / 15, elapsed))
-        let frequency = 28.0
+        let frequency = 16.0
         let displacement = value - target
         let change = velocity + frequency * displacement
         let decay = exp(-frequency * dt)

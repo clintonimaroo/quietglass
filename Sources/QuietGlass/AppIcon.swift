@@ -1,9 +1,9 @@
-// Geometry from @hugeicons/core-free-icons 4.3.4 (MIT).
-// Original SVGs and the required notice are in Resources/Hugeicons.
+// Vector geometry from the bundled icon assets (MIT).
+// See Resources/Icons/LICENSE.md for the required attribution.
 import AppKit
 import SwiftUI
 
-enum HugeIcon: CaseIterable {
+enum AppIcon: CaseIterable {
     case view, viewOff, play, pause, cancel, airpods, chevronDown, drag, clock, settings, target
 
     var path: Path {
@@ -284,8 +284,8 @@ enum HugeIcon: CaseIterable {
     }
 }
 
-struct HugeIconView: View {
-    let icon: HugeIcon
+struct AppIconView: View {
+    let icon: AppIcon
     var size: CGFloat = 16
     var body: some View {
         icon.path
