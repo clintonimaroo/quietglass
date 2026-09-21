@@ -1,10 +1,80 @@
 import XCTest
 import CoreML
 import CoreVideo
+import CoreImage
+import ImageIO
+import Vision
 import ShieldCore
 @testable import QuietGlass
 
 final class OwnerFaceModelTests: XCTestCase {
+    private func fixtureBuffer(_ name: String) throws -> CVPixelBuffer {
+        let url = try XCTUnwrap(Bundle.module.url(forResource: name, withExtension: "jpg", subdirectory: "Fixtures/OwnerPoses"))
+        let source = try XCTUnwrap(CGImageSourceCreateWithURL(url as CFURL, nil))
+        let image = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
+        var buffer: CVPixelBuffer?
+        XCTAssertEqual(CVPixelBufferCreate(nil, image.width, image.height, kCVPixelFormatType_32BGRA,
+                                          [kCVPixelBufferIOSurfacePropertiesKey: [:]] as CFDictionary, &buffer), kCVReturnSuccess)
+        let result = try XCTUnwrap(buffer)
+        CIContext().render(CIImage(cgImage: image), to: result)
+        return result
+    }
+
+    func testCameraPreservesContinuousPoseThroughLandmarkDetection() throws {
+        for name in ["center", "left", "right"] {
+            let buffer = try fixtureBuffer(name)
+            let detector = VNDetectFaceRectanglesRequest()
+            detector.revision = VNDetectFaceRectanglesRequestRevision3
+            try VNImageRequestHandler(cvPixelBuffer: buffer, orientation: .up, options: [:]).perform([detector])
+            let detected = try XCTUnwrap(detector.results?.first)
+            let faces = try OwnerFaceDetector.observations(in: buffer)
+            XCTAssertEqual(faces.count, 1)
+            let face = try XCTUnwrap(faces.first)
+            XCTAssertNotNil(face.landmarks)
+            XCTAssertEqual(try XCTUnwrap(face.yaw).doubleValue, try XCTUnwrap(detected.yaw).doubleValue, accuracy: 0.00001)
+            if name == "center" { XCTAssertLessThan(abs(face.yaw!.doubleValue), 0.14) }
+            if name == "left" { XCTAssertGreaterThan(face.yaw!.doubleValue, 0.22) }
+            if name == "right" { XCTAssertLessThan(face.yaw!.doubleValue, -0.22) }
+        }
+    }
+
+    func testActualVisionAndModelSamplesAdvanceBothEnrollmentTurns() throws {
+        let model = try OwnerFaceModel()
+        func sample(_ name: String) throws -> (vector: [Float], pose: OwnerPose) {
+            let buffer = try fixtureBuffer(name)
+            let face = try XCTUnwrap(OwnerFaceDetector.observations(in: buffer).first)
+            return try XCTUnwrap(model.features(buffer: buffer, face: face))
+        }
+        let center = try sample("center")
+        for (name, positive) in [("left", true), ("right", false)] {
+            let turned = try sample(name)
+            XCTAssertTrue(turned.pose.isValid)
+            var enrollment = OwnerEnrollment(turnPositive: positive)
+            var time = 1.0
+            for _ in 0..<5 {
+                enrollment.observe(vector: center.vector, pose: center.pose, faceCount: 1, at: time)
+                time += 0.3
+            }
+            for _ in 0..<4 {
+                enrollment.observe(vector: center.vector, pose: center.pose, faceCount: 1, at: time)
+                time += 0.1
+            }
+            XCTAssertEqual(enrollment.challenge.stage, .turn)
+            for _ in 0..<4 {
+                enrollment.observe(vector: turned.vector, pose: turned.pose, faceCount: 1, at: time)
+                time += 0.1
+            }
+            XCTAssertEqual(enrollment.vectors.count, 5)
+            XCTAssertEqual(enrollment.challenge.stage, .returnToCenter, name)
+            for _ in 0..<4 {
+                enrollment.observe(vector: center.vector, pose: center.pose, faceCount: 1, at: time)
+                time += 0.1
+            }
+            XCTAssertEqual(enrollment.challenge.stage, .closeEyes, name)
+            XCTAssertNil(enrollment.template, "A matching turn is not enough to save a face")
+        }
+    }
+
     func testMissingPackagedModelFailsWithoutDevelopmentFallback() throws {
         let app = FileManager.default.temporaryDirectory.appendingPathComponent("MissingModel-\(UUID().uuidString).app")
         try FileManager.default.createDirectory(at: app.appendingPathComponent("Contents"), withIntermediateDirectories: true)

@@ -5,6 +5,28 @@ import ShieldCore
 
 enum OwnerModelError: Error { case unavailable, invalidOutput }
 
+enum OwnerFaceDetector {
+    static func observations(in buffer: CVPixelBuffer) throws -> [VNFaceObservation] {
+        let handler = VNImageRequestHandler(cvPixelBuffer: buffer, orientation: .up, options: [:])
+        // A landmarks request on its own uses the older internal face detector,
+        // whose yaw is quantized to 0 / +/- pi/4. Detect explicitly with revision
+        // 3, then preserve those continuous poses while locating the landmarks.
+        let detector = VNDetectFaceRectanglesRequest()
+        detector.revision = VNDetectFaceRectanglesRequestRevision3
+        try handler.perform([detector])
+        let faces = (detector.results ?? []).filter { $0.confidence >= 0.6 }
+        guard faces.count == 1 else { return faces }
+        let landmarks = VNDetectFaceLandmarksRequest()
+        landmarks.revision = VNDetectFaceLandmarksRequestRevision3
+        landmarks.inputFaceObservations = faces
+        try handler.perform([landmarks])
+        // Preserve the detected count if landmarks are temporarily unavailable;
+        // feature extraction will reject that frame without inventing a pose.
+        if let result = landmarks.results, result.count == 1 { return result }
+        return faces
+    }
+}
+
 /// Instantiated and used only on the camera's serial queue. No frames leave it.
 final class OwnerFaceModel {
     private let model: MLModel

@@ -51,7 +51,9 @@ public struct OwnerPose: Equatable {
     public init(yaw: Double, eyes: Double, widestEye: Double? = nil) {
         self.yaw = yaw; self.eyes = eyes; self.widestEye = widestEye ?? eyes
     }
-    public var isValid: Bool { yaw.isFinite && eyes.isFinite && widestEye.isFinite && abs(yaw) <= 0.60 && (0...0.7).contains(eyes) && (eyes...0.7).contains(widestEye) }
+    // Measurement validity is separate from the angle requested by a step.
+    // A visible face turning past the target must not erase enrollment.
+    public var isValid: Bool { yaw.isFinite && eyes.isFinite && widestEye.isFinite && abs(yaw) <= .pi / 2 && (0...0.7).contains(eyes) && (eyes...0.7).contains(widestEye) }
 }
 
 /// A modest still-photo obstacle. RGB landmarks do not provide depth or reliable
@@ -89,7 +91,9 @@ public struct OwnerChallenge {
         let accepted: Bool
         switch stage {
         case .center, .returnToCenter: accepted = centered && eyesOpen
-        case .turn: accepted = (turnPositive ? pose.yaw : -pose.yaw) >= 0.22 && eyesOpen
+        // Eye landmarks change shape in profile. Validate head motion here;
+        // the following centered stages separately require open/closed/open eyes.
+        case .turn: accepted = (turnPositive ? pose.yaw : -pose.yaw) >= 0.22 && abs(pose.yaw) <= 1.05
         case .closeEyes: accepted = centered && pose.widestEye < openEyes * 0.50
         case .openEyes: accepted = centered && eyesOpen
         case .complete: return true
@@ -110,6 +114,8 @@ public struct OwnerChallenge {
         }
         return stage == .complete
     }
+
+    public mutating func pause() { heldSince = nil }
 
     public mutating func reset() {
         stage = .center
@@ -141,9 +147,12 @@ public struct OwnerPresence {
         }
         lastSample = time
         guard matches, let pose, pose.isValid else {
-            challenge.reset()
+            // A dropped landmark or brief mismatch must not count as a held
+            // pose. Restart the sequence only after sustained loss, using the
+            // same short grace period as the existing cover decision.
+            challenge.pause()
             if missingSince == nil { missingSince = time }
-            if time - (missingSince ?? time) >= 0.35 { covered = true }
+            if time - (missingSince ?? time) >= 0.35 { covered = true; challenge.reset() }
             return covered
         }
         missingSince = nil

@@ -109,6 +109,15 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
         super.init()
         nearby.onCoverage = { [weak self] value in self?.privacy.setNearbyCovered(value) }
         nearby.onMonitoring = { [weak self] value in self?.privacy.setNearbyMonitoring(value) }
+        nearby.prepareMonitoring = { [weak self] in
+            guard let self else { return .escapeUnavailable }
+            if self.nearby.response == .blur, !self.screenPermission { return .screenPermission }
+            guard self.shortcuts.armEscape(true) else {
+                self.privacyShortcutError = "Escape is unavailable. Nearby people could not start."
+                return .escapeUnavailable
+            }
+            return nil
+        }
         nearbyObservation = nearby.objectWillChange.receive(on: RunLoop.main).sink { [weak self] _ in
             self?.objectWillChange.send()
             self?.refreshEscape()
@@ -175,14 +184,23 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
         observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.prepareForSleep() }
         })
-        for name in [NSWorkspace.sessionDidResignActiveNotification, NSWorkspace.screensDidSleepNotification] {
-            observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                Task { @MainActor in self?.nearby.stop() }
+        let nearbyLifecycle: [(Notification.Name, Notification.Name, NearbyPauseReason)] = [
+            (NSWorkspace.screensDidSleepNotification, NSWorkspace.screensDidWakeNotification, .displaySleep),
+            (NSWorkspace.sessionDidResignActiveNotification, NSWorkspace.sessionDidBecomeActiveNotification, .inactiveSession)
+        ]
+        for (pause, resume, reason) in nearbyLifecycle {
+            observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: pause, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in self?.nearby.suspend(for: reason) }
+            })
+            observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: resume, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in self?.nearby.resume(after: reason) }
             })
         }
         observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
-                guard let self, self.enabled else { return }
+                guard let self else { return }
+                self.nearby.resume(after: .systemSleep)
+                guard self.enabled else { return }
                 self.detail = "Look at your screen and recenter after waking your Mac."
                 self.beginMotionIfAvailable()
                 self.updateShield()
@@ -252,7 +270,7 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
     }
 
     var notchClearsProtection: Bool {
-        previewing || privacy.fullScreen || privacy.focusEnabled || nearby.enabled || nearby.requesting
+        previewing || privacy.fullScreen || privacy.focusEnabled || nearby.wantsMonitoring
     }
 
     var nearbyBlurUnavailable: Bool { (nearby.enabled || nearby.requesting || nearby.covered) && nearby.response == .blur && privacy.captureUnavailable }
@@ -279,9 +297,8 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
 
     func setNearbyPeople(_ value: Bool) {
         if value, nearby.owner.busy || nearby.owner.enrolling { return }
-        if value, nearby.response == .blur, !screenPermission { requestScreenPermission(); return }
-        if value, !shortcuts.armEscape(true) { privacyShortcutError = "Escape is unavailable. Nearby people could not start."; return }
         nearby.setEnabled(value)
+        if value, nearby.status == .unavailable(.screenPermission) { requestScreenPermission() }
     }
 
     func setNearbyResponse(_ value: NearbyResponse) {
@@ -410,8 +427,8 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
         detail = "Small movements stay clear. Turn past \(Int(comfort))° to cover the screen."
     }
 
-    func dismissShield() {
-        nearby.stop()
+    func dismissShield(file: StaticString = #fileID, line: UInt = #line) {
+        nearby.stop(file: file, line: line)
         cancelLearning()
         stopPreview()
         response.dismiss()
@@ -437,7 +454,7 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
         guard enabled else {
             clearOverlay()
             if privacy.focusEnabled { status = "Focus mode is on" }
-            else if nearby.enabled || nearby.requesting { status = nearby.message }
+            else if nearby.wantsMonitoring { status = nearby.message }
             else { status = "Ready when you are" }
             return
         }
@@ -499,7 +516,7 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
     }
 
     private func refreshEscape() {
-        shortcuts.armEscape(nearby.enabled || nearby.requesting || privacy.wantsProtection || overlay.isCapturing || coverage > 0)
+        shortcuts.armEscape(nearby.wantsMonitoring || privacy.wantsProtection || overlay.isCapturing || coverage > 0)
     }
 
     func toggleInstantShield() {
@@ -730,7 +747,7 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
         motionReferenceGeneration += 1
         invalidateDisplayCalibration()
         cancelLearning(message: "Calibration stopped while your Mac slept.")
-        nearby.stop()
+        nearby.suspend(for: .systemSleep)
         privacy.dismissAll()
         motion.stopDeviceMotionUpdates()
         center = nil
@@ -769,7 +786,7 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
     private func save(_ key: String, _ value: Double) { UserDefaults.standard.set(value, forKey: key) }
 
     func shutdown() {
-        nearby.stop()
+        nearby.shutdown()
         stop()
         privacy.shutdown()
         timer?.invalidate()

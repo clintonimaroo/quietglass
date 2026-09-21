@@ -717,7 +717,7 @@ private struct NotchBarView: View {
         switch item {
         case .tracking:
             if model.privacy.fullScreen || model.privacy.focusEnabled { return "Clear privacy shield" }
-            if model.nearby.enabled || model.nearby.requesting { return "Stop Nearby people" }
+            if model.nearby.wantsMonitoring { return "Stop Nearby people" }
             if model.previewing { return "Clear preview" }
             if model.enabled { return "Pause tracking" }
             if !model.screenPermission { return model.screenAccessAction }
@@ -756,7 +756,7 @@ private struct NotchHintView: View {
         switch action {
         case .tracking:
             if model.privacy.fullScreen || model.privacy.focusEnabled { return "Clear privacy shield" }
-            if model.nearby.enabled || model.nearby.requesting { return "Stop Nearby people" }
+            if model.nearby.wantsMonitoring { return "Stop Nearby people" }
             if model.previewing { return "Clear preview" }
             if model.enabled { return "Pause tracking" }
             if !model.screenPermission { return model.screenAccessAction }

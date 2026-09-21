@@ -2,6 +2,8 @@
 
 **Privacy for what’s on your Mac.**
 
+[Download for Mac](https://github.com/clintonimaroo/quietglass/releases/latest) · macOS 14 or later · Apple silicon and Intel
+
 QuietGlass is an open-source macOS app that helps you control what stays visible on your screen. Blur your displays when you look away, protect a specific window or area, and keep your active work clear while surrounding content fades into the background.
 
 Built for everyday work in shared offices, cafés, classrooms, and other spaces where your screen is visible to people around you.
@@ -32,10 +34,12 @@ Manual screen blur, window protection, area protection, and Focus mode work with
 
 ### Installation
 
-1. Move `QuietGlass.app` into Applications.
+1. Download and unzip the latest release, then move `QuietGlass.app` into Applications.
 2. Open QuietGlass.
 3. Grant **Screen Recording** access when prompted.
 4. Hover over the control bar above the Dock to access protection controls and settings.
+
+The current download is locally signed and not Apple-notarized. If macOS blocks the first launch, follow the **Open Anyway** instructions included in the download.
 
 ### Choose your setup
 
@@ -43,6 +47,8 @@ Manual screen blur, window protection, area protection, and Focus mode work with
 - **For look-away protection:** connect your AirPods, select **Start tracking**, and follow the calibration steps.
 - **For camera protection:** open **Settings → Protection → Nearby people**, enable detection, and choose a warning or automatic blur.
 - **For owner recognition:** select **Set up my face**, authenticate with Touch ID or your Mac password, and follow the circular camera guide. Save your face when enrollment is complete.
+
+See the [camera protection guide](CAMERA-PROTECTION.md) for setup details, recognition behavior, and privacy.
 
 ## Permissions
 
@@ -73,7 +79,7 @@ QuietGlass processes screen content, recognized text, camera frames, and motion 
 - Screen images, camera frames, recognized text, and motion history are processed without being saved or uploaded by QuietGlass.
 - Preferences, app rules, and custom phrases are stored locally.
 - Optional owner enrollment stores a face template in the encrypted macOS Keychain. Saved face data can be deleted in Settings.
-- Camera access is limited to enrollment and enabled Nearby people monitoring. Monitoring starts off after launch or sleep.
+- Camera access is limited to enrollment and enabled Nearby people monitoring. Your detection setting is remembered across app launches. Monitoring pauses while your Mac is inactive and resumes when you return. Turning detection off or pressing Escape keeps it off until you enable it again.
 - QuietGlass does not record microphone audio.
 - Core protection features do not require a hosted backend or cloud inference.
 
@@ -147,7 +153,7 @@ swift test
 
 Automated tests cover protection policies, calibration, screen geometry, text matching, camera state handling, owner enrollment, and template storage.
 
-Hardware and interaction checks are maintained separately from the README so the product overview stays focused and the engineering records remain detailed. See the [validation notes](VALIDATION.md), [camera test plan](NEARBY-PEOPLE-TESTING.md), and [owner recognition documentation](OWNER-RECOGNITION.md).
+Hardware and interaction checks are recorded in the [validation notes](VALIDATION.md).
 
 ## Product direction
 

@@ -4,6 +4,7 @@ import AVFoundation
 import Vision
 import Combine
 import ShieldCore
+import OSLog
 
 enum NearbyResponse: String, CaseIterable, Identifiable {
     case warning, blur
@@ -13,6 +14,7 @@ enum NearbyResponse: String, CaseIterable, Identifiable {
 
 enum NearbyCameraFailure: Error, Equatable {
     case permission, noCamera, configuration, interrupted, disconnected, stalled, analysis, recognition, ownerAccess
+    case screenPermission, escapeUnavailable
 
     var title: String {
         switch self {
@@ -25,12 +27,18 @@ enum NearbyCameraFailure: Error, Equatable {
         case .configuration: return "Camera unavailable"
         case .recognition: return "Owner recognition unavailable"
         case .ownerAccess: return "Unlock your saved face to continue"
+        case .screenPermission: return "Screen Recording access is off"
+        case .escapeUnavailable: return "Escape shortcut is unavailable"
         }
     }
 }
 
 enum NearbyCameraStatus: Equatable {
-    case off, requesting, starting, watching(Int), unavailable(NearbyCameraFailure)
+    case off, paused, requesting, starting, watching(Int), unavailable(NearbyCameraFailure)
+}
+
+enum NearbyPauseReason: Hashable {
+    case systemSleep, displaySleep, inactiveSession
 }
 
 struct NearbyFaceSample {
@@ -54,6 +62,8 @@ extension NearbyCameraSession {
 
 @MainActor
 final class NearbyPeople: ObservableObject {
+    // The switch represents the user's choice, not temporary camera availability.
+    @Published private(set) var wantsMonitoring: Bool
     @Published private(set) var enabled = false
     @Published private(set) var requesting = false
     @Published private(set) var covered = false
@@ -63,6 +73,7 @@ final class NearbyPeople: ObservableObject {
     let owner: OwnerRecognition
     var onCoverage: ((Bool) -> Void)?
     var onMonitoring: ((Bool) -> Void)?
+    var prepareMonitoring: (() -> NearbyCameraFailure?)?
     private let preferences: UserDefaults
     private let cameraAccess: () async -> Bool
     private let makeCamera: (@escaping (Result<NearbyFaceSample, NearbyCameraFailure>) -> Void) -> NearbyCameraSession
@@ -80,6 +91,7 @@ final class NearbyPeople: ObservableObject {
     private var ownerPresence = OwnerPresence(turnPositive: Bool.random())
     @Published private(set) var ownerPrompt = "Look at the camera"
     private var ownerMatches = false
+    private var pauseReasons: Set<NearbyPauseReason> = []
 
     init(preferences: UserDefaults = .standard,
          cameraAccess: @escaping () async -> Bool = NearbyPeople.requestCameraAccess,
@@ -92,6 +104,7 @@ final class NearbyPeople: ObservableObject {
         self.clock = clock
         self.usesWatchdog = usesWatchdog
         self.owner = owner ?? OwnerRecognition(preferences: preferences)
+        wantsMonitoring = preferences.bool(forKey: "nearbyEnabled")
         response = NearbyResponse(rawValue: preferences.string(forKey: "nearbyResponse") ?? "") ?? .blur
         ownerObservation = self.owner.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
     }
@@ -116,11 +129,17 @@ final class NearbyPeople: ObservableObject {
         if ownerRequired { return ownerMatches ? ownerPrompt : "Owner not verified" }
         return "Additional face detected"
     }
-    var noticeDetail: String { covered ? "Blur stays on · Esc to stop" : canRetry ? "Open Settings to retry" : "Look around · Esc to dismiss" }
+    var noticeDetail: String {
+        if covered { return "Blur stays on · Esc to stop" }
+        if canRetry { return "Open Settings to retry" }
+        if ownerRequired { return "Keep your face in view · Esc to stop" }
+        return "Look around · Esc to dismiss"
+    }
 
     var message: String {
         switch status {
         case .off: return "Off"
+        case .paused: return "Paused while your Mac is inactive"
         case .requesting: return ownerRequired ? "Unlocking your saved face…" : "Waiting for camera access…"
         case .starting: return covered ? "Restarting camera · Blur stays on" : "Starting camera…"
         case .unavailable(let failure): return failure.title + (covered ? " · Blur stays on" : " · Monitoring stopped")
@@ -145,16 +164,41 @@ final class NearbyPeople: ObservableObject {
 
     func setEnabled(_ value: Bool) {
         guard value else { stop(); return }
+        wantsMonitoring = true
+        preferences.set(true, forKey: "nearbyEnabled")
         guard !enabled, !requesting else { return }
         begin()
     }
 
     func retry() {
-        guard canRetry else { return }
+        guard wantsMonitoring, canRetry else { return }
         begin()
     }
 
+    // Called after the app has connected protection and shortcut callbacks.
+    func restore() {
+        guard wantsMonitoring, !enabled, !requesting, !canRetry else { return }
+        begin()
+    }
+
+    func suspend(for reason: NearbyPauseReason) {
+        guard pauseReasons.insert(reason).inserted else { return }
+        stopSession()
+        if wantsMonitoring { status = .paused }
+    }
+
+    func resume(after reason: NearbyPauseReason) {
+        guard pauseReasons.remove(reason) != nil else { return }
+        restore()
+    }
+
     private func begin() {
+        guard pauseReasons.isEmpty else { status = .paused; return }
+        guard !owner.busy, !owner.enrolling else { return }
+        if let failure = prepareMonitoring?() {
+            failed(failure)
+            return
+        }
         generation += 1
         let token = generation
         worker?.stop(); worker = nil
@@ -173,7 +217,7 @@ final class NearbyPeople: ObservableObject {
         // Owner mode starts protected, including while authentication is pending.
         updateProtection()
         Task { [weak self, cameraAccess] in
-            guard let self else { return }
+            guard let self, self.generation == token else { return }
             if self.ownerRequired {
                 do { try await self.owner.prepareForMonitoring() }
                 catch {
@@ -270,7 +314,21 @@ final class NearbyPeople: ObservableObject {
         }
     }
 
-    func stop() {
+    func stop(file: StaticString = #fileID, line: UInt = #line) {
+        if wantsMonitoring {
+            Logger(subsystem: "local.clinton.QuietGlass", category: "NearbyPeople")
+                .notice("Detection turned off at \(String(describing: file), privacy: .public):\(line)")
+        }
+        wantsMonitoring = false
+        preferences.set(false, forKey: "nearbyEnabled")
+        stopSession()
+    }
+
+    func shutdown() {
+        stopSession()
+    }
+
+    private func stopSession() {
         generation += 1
         worker?.stop(); worker = nil
         watchdog?.invalidate(); watchdog = nil
@@ -332,6 +390,12 @@ final class FaceCamera: NSObject, NearbyCameraSession, AVCaptureVideoDataOutputS
                 session.addInput(input)
                 session.addOutput(output)
                 session.commitConfiguration()
+                // Only the on-screen preview is mirrored. Pose directions must
+                // always refer to the person's own left and right.
+                if let connection = output.connection(with: .video), connection.isVideoMirroringSupported {
+                    connection.automaticallyAdjustsVideoMirroring = false
+                    connection.isVideoMirrored = false
+                }
                 limitFrameRate(device)
                 observe(AVCaptureSession.runtimeErrorNotification, object: session, failure: .configuration)
                 observe(AVCaptureSession.wasInterruptedNotification, object: session, failure: .interrupted)
@@ -385,9 +449,14 @@ final class FaceCamera: NSObject, NearbyCameraSession, AVCaptureVideoDataOutputS
         lastScan = now
         do {
             let sample = try autoreleasepool {
-                let request: VNImageBasedRequest = recognition ? VNDetectFaceLandmarksRequest() : VNDetectFaceRectanglesRequest()
-                try VNImageRequestHandler(cvPixelBuffer: buffer, orientation: .up, options: [:]).perform([request])
-                let faces = (request.results as? [VNFaceObservation] ?? []).filter { $0.confidence >= 0.6 }
+                let faces: [VNFaceObservation]
+                if recognition {
+                    faces = try OwnerFaceDetector.observations(in: buffer)
+                } else {
+                    let request = VNDetectFaceRectanglesRequest()
+                    try VNImageRequestHandler(cvPixelBuffer: buffer, orientation: .up, options: [:]).perform([request])
+                    faces = (request.results ?? []).filter { $0.confidence >= 0.6 }
+                }
                 var sample = NearbyFaceSample(count: faces.count, capturedAt: now)
                 if recognition, faces.count == 1 {
                     guard let recognizer else { throw OwnerModelError.unavailable }

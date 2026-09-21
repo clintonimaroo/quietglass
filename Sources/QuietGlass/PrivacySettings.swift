@@ -472,7 +472,7 @@ private struct PrivacySettingsView: View {
     @ViewBuilder private var nearbySettings: some View {
         section("Nearby people") {
             row("Detect additional faces", detail: "Uses your camera while you work. AirPods are not required.") {
-                Toggle("Nearby people", isOn: Binding(get: { model.nearby.enabled || model.nearby.requesting }, set: { model.setNearbyPeople($0) }))
+                Toggle("Nearby people", isOn: Binding(get: { model.nearby.wantsMonitoring }, set: { model.setNearbyPeople($0) }))
                     .labelsHidden()
                     .disabled(model.nearby.owner.busy || model.nearby.owner.enrolling)
             }
@@ -511,6 +511,9 @@ private struct PrivacySettingsView: View {
                 divider
                 row(model.nearby.message) {
                     if model.nearby.canRetry {
+                        if model.nearby.status == .unavailable(.screenPermission) {
+                            Button("Open Screen Settings") { model.requestScreenPermission() }
+                        }
                         if model.nearby.needsCameraPermission {
                             Button("Camera Settings") {
                                 NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera")!)
@@ -530,7 +533,7 @@ private struct PrivacySettingsView: View {
                 }
                 divider
             }
-            note("Experimental · Poor light, glasses, and people outside the camera’s view can cause misses. Recognize me checks your face locally; it is not Face ID or a screen lock, and photos or video may fool it. Without it, any steady single face can clear the response. Camera images are never saved. Monitoring starts off after launch or sleep; Escape stops it.")
+            note("Experimental · Poor light, glasses, and people outside the camera’s view can cause misses. Recognize me checks your face locally; it is not Face ID or a screen lock, and photos or video may fool it. Without it, any steady single face can clear the response. Camera images are never saved. Your detection setting is remembered. Monitoring pauses while your Mac is inactive and resumes when you return; Escape turns it off.")
         }
     }
 

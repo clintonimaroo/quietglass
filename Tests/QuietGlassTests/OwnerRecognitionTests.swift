@@ -93,6 +93,27 @@ private final class OwnerTestCamera: NearbyCameraSession {
 }
 
 final class OwnerRecognitionTests: XCTestCase {
+    @MainActor func testResumingSavedOwnerMonitoringRequiresAuthenticationAndANewChallenge() async {
+        let h = OwnerRig(); defer { h.finish() }
+        await h.start()
+        await h.passChallenge()
+        XCTAssertFalse(h.nearby.covered)
+        let original = h.cameras[0]
+        h.nearby.suspend(for: .inactiveSession)
+        XCTAssertTrue(original.stopped)
+        XCTAssertNil(h.owner.template)
+        XCTAssertTrue(h.nearby.wantsMonitoring)
+        h.nearby.resume(after: .inactiveSession)
+        await h.wait { h.cameras.count == 2 }
+        XCTAssertEqual(h.authCount, 2)
+        XCTAssertTrue(h.nearby.covered)
+        original.completion(.success(NearbyFaceSample(count: 1, capturedAt: h.now, vector: h.vector, pose: OwnerPose(yaw: 0, eyes: 0.3))))
+        for _ in 0..<20 { await h.send() }
+        XCTAssertTrue(h.nearby.covered)
+        await h.passChallenge()
+        XCTAssertFalse(h.nearby.covered)
+    }
+
     @MainActor func testOwnerStartsCoveredAndDifferentSingleFaceNeverClears() async {
         let h = OwnerRig(); defer { h.finish() }
         XCTAssertTrue(h.cameras.isEmpty)
