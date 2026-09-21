@@ -8,6 +8,8 @@ QuietGlass is an open-source macOS app that helps you control what stays visible
 
 Built for everyday work in shared offices, cafés, classrooms, and other spaces where your screen is visible to people around you.
 
+https://github.com/user-attachments/assets/e501653a-e031-4d6f-ae29-210155e961f5
+
 ## Features
 
 | Feature | What it does |
