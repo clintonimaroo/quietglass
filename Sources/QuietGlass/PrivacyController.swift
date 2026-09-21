@@ -10,11 +10,21 @@ struct ProtectedWindow: Equatable {
     let name: String
 }
 
+struct ProtectedArea: Identifiable {
+    let id = UUID()
+    let window: ProtectedWindow
+    let rectangle: CGRect
+}
+
 @MainActor
 final class PrivacyController: NSObject, ObservableObject, SCContentSharingPickerObserver {
     @Published private(set) var instant = false
     @Published private(set) var peeking = false
     @Published private(set) var paused = false
+    @Published private(set) var protectedAreas: [ProtectedArea] = []
+    private let areaSelector = AreaSelectionController()
+    private var areaSelectionTask: Task<Void, Never>?
+    var onPrepareAreaSelection: (() -> Void)?
     @Published private(set) var selectedWindow: ProtectedWindow?
     @Published private(set) var notice: String?
     @Published private(set) var detectedCount = 0
@@ -23,6 +33,11 @@ final class PrivacyController: NSObject, ObservableObject, SCContentSharingPicke
     @Published private(set) var rules: [AppPrivacyRule]
     @Published private(set) var frontAppName = "No active app"
     @Published private(set) var frontBundleID: String?
+    @Published private(set) var focusEnabled = false
+    @Published private(set) var nearbyMonitoring = false
+    @Published private(set) var nearbyCovered = false
+    @Published private(set) var displayNames = NSScreen.screens.map(\.localizedName)
+    @Published private(set) var customPhrases: [String]
     @Published var scanEnabled: Bool {
         didSet { UserDefaults.standard.set(scanEnabled, forKey: "privacyScanEnabled"); paused = false; restartCapture() }
     }
@@ -36,6 +51,13 @@ final class PrivacyController: NSObject, ObservableObject, SCContentSharingPicke
     var blurRadius = 28.0 {
         didSet { for capture in captures.values { capture.setRadius(blurRadius) } }
     }
+    var includeInCaptures = false {
+        didSet {
+            for surface in surfaces.values {
+                surface.panel.sharingType = includeInCaptures ? .readOnly : .none
+            }
+        }
+    }
     private var frontPID: pid_t?
     private var observers: [NSObjectProtocol] = []
     private var timer: Timer?
@@ -45,12 +67,14 @@ final class PrivacyController: NSObject, ObservableObject, SCContentSharingPicke
     private var detected: [CGDirectDisplayID: [CGRect]] = [:]
     private var visibleRegions: [CGRect] = []
     private var controlRegions: [CGRect] = []
+    private var focusWindow: CGRect?
     private var captureTask: Task<Void, Never>?
     private var generation = 0
     private var captureAllowed = false
 
     override init() {
         let prefs = UserDefaults.standard
+        customPhrases = prefs.stringArray(forKey: "privacyCustomPhrases") ?? []
         scanEnabled = prefs.bool(forKey: "privacyScanEnabled")
         scanOptions = SensitiveTextOptions(rawValue: prefs.object(forKey: "privacyScanOptions") == nil ? 1 : prefs.integer(forKey: "privacyScanOptions"))
         rules = prefs.data(forKey: "privacyAppRules").flatMap { try? JSONDecoder().decode([AppPrivacyRule].self, from: $0) } ?? []
@@ -69,7 +93,35 @@ final class PrivacyController: NSObject, ObservableObject, SCContentSharingPicke
         })
     }
 
-    var wantsProtection: Bool { instant || (!paused && (selectedWindow != nil || scanEnabled)) }
+    var fullScreen: Bool { instant || nearbyCovered }
+    var wantsProtection: Bool { fullScreen || nearbyMonitoring || (!paused && (selectedWindow != nil || !protectedAreas.isEmpty || scanEnabled || focusEnabled)) }
+
+    func setFocus(_ value: Bool) {
+        guard value != focusEnabled else { return }
+        focusEnabled = value
+        paused = false
+        restartCapture()
+    }
+
+    func setNearbyMonitoring(_ value: Bool) {
+        guard value != nearbyMonitoring else { return }
+        nearbyMonitoring = value
+        if !value { nearbyCovered = false }
+        restartCapture()
+    }
+
+    func setNearbyCovered(_ value: Bool) {
+        guard value != nearbyCovered else { return }
+        nearbyCovered = value
+        refreshGeometry()
+        onActivityChanged?()
+    }
+
+    func savePhrases(_ text: String) {
+        customPhrases = SensitiveText.cleanPhrases(text.components(separatedBy: .newlines))
+        UserDefaults.standard.set(customPhrases, forKey: "privacyCustomPhrases")
+        if scanEnabled { restartCapture() }
+    }
     var ruleMode: AppProtectionMode { rules.first { $0.bundleID == frontBundleID }?.mode ?? .standard }
     var canPickWindow: Bool { if #available(macOS 15.2, *) { return true }; return false }
 
@@ -82,6 +134,7 @@ final class PrivacyController: NSObject, ObservableObject, SCContentSharingPicke
         frontBundleID = bundle
         frontAppName = app.localizedName ?? bundle
         onRulesChanged?()
+        refreshGeometry()
     }
 
     func addActiveApp() {
@@ -128,28 +181,82 @@ final class PrivacyController: NSObject, ObservableObject, SCContentSharingPicke
     }
 
     func setPeeking(_ value: Bool) {
-        guard instant else { return }
+        guard fullScreen else { return }
         peeking = value
         render()
     }
 
     func dismissAll() {
+        areaSelectionTask?.cancel(); areaSelectionTask = nil
+        areaSelector.close()
+        protectedAreas.removeAll()
         instant = false
+        nearbyCovered = false
+        focusEnabled = false
         peeking = false
         paused = true
         restartCapture()
     }
 
     func resume() { paused = false; restartCapture() }
+    func pauseProtection() { paused = true; focusEnabled = false; restartCapture() }
 
     func removeWindow() { selectedWindow = nil; visibleRegions = []; restartCapture() }
 
+    func chooseArea() {
+        areaSelectionTask?.cancel()
+        areaSelector.close()
+        guard let pid = frontPID, let app = NSRunningApplication(processIdentifier: pid) else {
+            notice = "Open the window you want to protect, then choose an area."
+            return
+        }
+        notice = nil
+        NSApp.yieldActivation(to: app)
+        onPrepareAreaSelection?()
+        app.activate(from: .current, options: [])
+        areaSelectionTask = Task { [weak self] in
+            for _ in 0..<20 {
+                do { try await Task.sleep(nanoseconds: 100_000_000) } catch { return }
+                guard let self else { return }
+                if NSWorkspace.shared.frontmostApplication?.processIdentifier == pid,
+                   let item = Self.frontWindowItem(in: self.windowList(onScreen: true), for: pid) {
+                    self.showAreaSelector(item: item, pid: pid, name: app.localizedName ?? "Selected window")
+                    return
+                }
+            }
+            self?.notice = "Bring the window you want to protect into view, then choose an area again."
+        }
+    }
+
+    private func showAreaSelector(item: [String: Any], pid: pid_t, name: String) {
+        guard
+              let number = item[kCGWindowNumber as String] as? NSNumber,
+              let bounds = item[kCGWindowBounds as String] as? NSDictionary,
+              let quartz = CGRect(dictionaryRepresentation: bounds) else {
+            notice = "Open a window first, then choose an area."
+            return
+        }
+        let top = NSScreen.screens.first?.frame.maxY ?? 0
+        let frame = CGRect(x: quartz.minX, y: top - quartz.maxY, width: quartz.width, height: quartz.height)
+        let window = ProtectedWindow(id: number.uint32Value, owner: pid, name: name)
+        areaSelector.show(frame: frame) { [weak self] rectangle in
+            self?.protectArea(rectangle, in: window)
+        }
+    }
+
+    func protectArea(_ rectangle: CGRect, in window: ProtectedWindow) {
+        protectedAreas.append(ProtectedArea(window: window, rectangle: rectangle))
+        paused = false
+        restartCapture()
+    }
+
+    func removeArea(_ id: UUID) { protectedAreas.removeAll { $0.id == id }; restartCapture() }
+    func removeAllAreas() { protectedAreas.removeAll(); restartCapture() }
+
     func protectFrontWindow() {
         guard let pid = frontPID else { notice = "Open the window you want to protect first."; return }
-        guard let item = windowList(onScreen: true).first(where: {
-            ($0[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == pid &&
-            ($0[kCGWindowLayer as String] as? NSNumber)?.intValue == 0
-        }), let number = item[kCGWindowNumber as String] as? NSNumber else {
+        guard let item = Self.frontWindowItem(in: windowList(onScreen: true), for: pid),
+              let number = item[kCGWindowNumber as String] as? NSNumber else {
             notice = "No visible window is available for \(frontAppName)."
             return
         }
@@ -198,15 +305,16 @@ final class PrivacyController: NSObject, ObservableObject, SCContentSharingPicke
     }
 
     private func restartCapture() {
-        stopCapture()
+        stopCapture(clearSurfaces: !wantsProtection)
         notice = nil
         captureUnavailable = false
         captureAllowed = false
         guard wantsProtection else { onActivityChanged?(); return }
-        guard requestEscape?() == true else { paused = true; instant = false; notice = "Escape is unavailable. Protection is paused."; onActivityChanged?(); return }
+        guard requestEscape?() == true else { paused = true; instant = false; nearbyCovered = false; notice = "Escape is unavailable. Protection is paused."; onActivityChanged?(); return }
         guard CGPreflightScreenCaptureAccess() else {
             paused = true
             instant = false
+            nearbyCovered = false
             notice = "Allow screen access in the notch controls to use privacy blur."
             onActivityChanged?()
             return
@@ -222,6 +330,7 @@ final class PrivacyController: NSObject, ObservableObject, SCContentSharingPicke
     }
 
     func screenParametersChanged() {
+        displayNames = NSScreen.screens.map(\.localizedName)
         reconcileSurfaces()
         refreshGeometry()
     }
@@ -239,7 +348,7 @@ final class PrivacyController: NSObject, ObservableObject, SCContentSharingPicke
                     detected.removeValue(forKey: id)
                 }
             }
-            else { surfaces[id] = PrivacySurface(screen: screen) }
+            else { surfaces[id] = PrivacySurface(screen: screen, includeInCaptures: includeInCaptures) }
         }
         for id in Set(surfaces.keys).subtracting(live) {
             captures.removeValue(forKey: id)?.stop()
@@ -254,10 +363,26 @@ final class PrivacyController: NSObject, ObservableObject, SCContentSharingPicke
         CGWindowListCopyWindowInfo(onScreen ? [.optionOnScreenOnly, .excludeDesktopElements] : [.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
     }
 
+    static func frontWindowItem(in items: [[String: Any]], for pid: pid_t) -> [String: Any]? {
+        items.first { item in
+            guard (item[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == pid,
+                  (item[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
+                  (item[kCGWindowAlpha as String] as? Double ?? 1) > 0,
+                  let bounds = item[kCGWindowBounds as String] as? NSDictionary,
+                  let frame = CGRect(dictionaryRepresentation: bounds),
+                  frame.width > 80, frame.height > 80 else { return false }
+            return frame.height >= 200 || frame.width / frame.height < 6
+        }
+    }
+
     private func refreshGeometry() {
         guard wantsProtection else { return }
         visibleRegions = []
-        let items = windowList(onScreen: true)
+        let dockPID = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first?.processIdentifier
+        let items = windowList(onScreen: true).filter { item in
+            guard let dockPID else { return true }
+            return (item[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value != dockPID
+        }
         let top = NSScreen.screens.first?.frame.maxY ?? 0
         controlRegions = items.compactMap { item in
             guard (item[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == ProcessInfo.processInfo.processIdentifier,
@@ -266,7 +391,13 @@ final class PrivacyController: NSObject, ObservableObject, SCContentSharingPicke
                   let quartz = CGRect(dictionaryRepresentation: bounds) else { return nil }
             return CGRect(x: quartz.minX, y: top - quartz.maxY, width: quartz.width, height: quartz.height)
         }
-        if !instant, let selected = selectedWindow {
+        focusWindow = frontPID.flatMap { Self.frontWindowItem(in: items, for: $0) }.flatMap { item in
+            guard
+                  let bounds = item[kCGWindowBounds as String] as? NSDictionary,
+                  let quartz = CGRect(dictionaryRepresentation: bounds) else { return nil }
+            return CGRect(x: quartz.minX, y: top - quartz.maxY, width: quartz.width, height: quartz.height)
+        }
+        if !fullScreen, !paused, let selected = selectedWindow {
             var occluders: [CGRect] = []
             for item in items {
                 guard let number = item[kCGWindowNumber as String] as? NSNumber,
@@ -291,18 +422,47 @@ final class PrivacyController: NSObject, ObservableObject, SCContentSharingPicke
             }) {
                 selectedWindow = nil
                 notice = "The protected window closed."
-                if !scanEnabled { stopCapture(); onActivityChanged?(); return }
+                if !wantsProtection { stopCapture(); onActivityChanged?(); return }
             }
         }
+        if !fullScreen, !paused, !protectedAreas.isEmpty {
+            let existing = windowList(onScreen: false)
+            protectedAreas.removeAll { area in
+                !existing.contains { ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value == area.window.id && ($0[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == area.window.owner }
+            }
+            for area in protectedAreas {
+                var occluders: [CGRect] = []
+                for item in items {
+                    guard let bounds = item[kCGWindowBounds as String] as? NSDictionary,
+                          let quartz = CGRect(dictionaryRepresentation: bounds),
+                          (item[kCGWindowAlpha as String] as? Double ?? 1) > 0 else { continue }
+                    let frame = CGRect(x: quartz.minX, y: top - quartz.maxY, width: quartz.width, height: quartz.height)
+                    if (item[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == ProcessInfo.processInfo.processIdentifier {
+                        if (item[kCGWindowLayer as String] as? Int ?? 0) == 0 { occluders.append(frame) }
+                        continue
+                    }
+                    if (item[kCGWindowNumber as String] as? NSNumber)?.uint32Value == area.window.id,
+                       (item[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == area.window.owner {
+                        visibleRegions += ScreenRegions.visible(ScreenRegions.fromVision(area.rectangle, in: frame), behind: occluders)
+                        break
+                    }
+                    if (item[kCGWindowLayer as String] as? Int ?? 0) >= 0 { occluders.append(frame) }
+                }
+            }
+        }
+        guard wantsProtection else { stopCapture(); onActivityChanged?(); return }
         render()
         startCaptureIfNeeded()
     }
 
     private func render() {
         for (id, surface) in surfaces {
-            let regions = visibleRegions.map { $0.intersection(surface.panel.frame) }.filter { !$0.isNull && !$0.isEmpty }
-            let sensitive = (detected[id] ?? []).flatMap { ScreenRegions.visible(ScreenRegions.fromVision($0, in: surface.panel.frame), behind: controlRegions) }
-            surface.update(windows: instant ? [] : regions, sensitive: instant ? [] : sensitive, fullScreen: instant, peeking: peeking)
+            var regions = visibleRegions.map { $0.intersection(surface.panel.frame) }.filter { !$0.isNull && !$0.isEmpty }
+            if focusEnabled, !paused {
+                regions += ScreenRegions.visible(surface.panel.frame, behind: controlRegions + (focusWindow.map { [$0] } ?? []))
+            }
+            let sensitive = (paused ? [] : detected[id] ?? []).flatMap { ScreenRegions.visible(ScreenRegions.fromVision($0, in: surface.panel.frame), behind: controlRegions) }
+            surface.update(windows: fullScreen ? [] : regions, sensitive: fullScreen ? [] : sensitive, fullScreen: fullScreen, peeking: peeking && instant && !nearbyCovered)
         }
     }
 
@@ -325,14 +485,16 @@ final class PrivacyController: NSObject, ObservableObject, SCContentSharingPicke
                     let config = SCStreamConfiguration()
                     config.width = max(1, display.width)
                     config.height = max(1, display.height)
-                    config.minimumFrameInterval = CMTime(value: 1, timescale: self.instant ? 30 : self.selectedWindow == nil ? 3 : 12)
+                    config.minimumFrameInterval = CMTime(value: 1, timescale: (self.fullScreen || self.nearbyMonitoring || self.focusEnabled) ? 30 : (self.selectedWindow == nil && self.protectedAreas.isEmpty) ? 3 : 12)
                     config.queueDepth = 3
+                    config.backgroundColor = DisplayCapture.background
+                    config.shouldBeOpaque = true
                     config.showsCursor = false
                     config.capturesAudio = false
                     config.pixelFormat = kCVPixelFormatType_32BGRA
                     let filter = SCContentFilter(display: display, excludingApplications: own, exceptingWindows: [])
                     if #available(macOS 14.2, *) { filter.includeMenuBar = true }
-                    let analyzer: LocalTextAnalyzer? = self.scanEnabled && !self.instant ? LocalTextAnalyzer(options: self.scanOptions) { [weak self] result in
+                    let analyzer: LocalTextAnalyzer? = self.scanEnabled && !self.paused && !self.instant ? LocalTextAnalyzer(options: self.scanOptions, phrases: self.customPhrases) { [weak self] result in
                         guard let self, self.generation == token, self.captures[id]?.id == session else { return }
                         switch result {
                         case .success(let regions):
@@ -380,7 +542,7 @@ final class PrivacyController: NSObject, ObservableObject, SCContentSharingPicke
         captureAllowed = false
         captureUnavailable = true
         notice = denied ? "Screen access was revoked. Restore it, then click Resume." : "Capture stopped. Click Resume to retry."
-        if instant || selectedWindow != nil || scanEnabled {
+        if wantsProtection {
             notice! += " The last available blur is retained until capture resumes."
             refreshGeometry()
             timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
@@ -407,6 +569,8 @@ final class PrivacyController: NSObject, ObservableObject, SCContentSharingPicke
     }
 
     func shutdown() {
+        areaSelectionTask?.cancel()
+        areaSelector.close()
         stopCapture()
         SCContentSharingPicker.shared.remove(self)
         for observer in observers {

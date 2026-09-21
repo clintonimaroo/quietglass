@@ -5,6 +5,16 @@ import AppKit
 @testable import QuietGlass
 
 final class PrivacySurfaceTests: XCTestCase {
+    @MainActor func testNewSurfaceLaysOutImageAndMaskWithoutAResize() throws {
+        _ = NSApplication.shared
+        let screen = try XCTUnwrap(NSScreen.screens.first)
+        let surface = PrivacySurface(screen: screen)
+        defer { surface.panel.close() }
+        let layer = try XCTUnwrap(surface.panel.contentView?.layer?.sublayers?.first)
+        XCTAssertEqual(layer.frame.size, screen.frame.size)
+        XCTAssertEqual(layer.mask?.frame.size, screen.frame.size)
+    }
+
     @MainActor func testFullScreenBlurAndPeekUseCapturedPixelsWithoutOpaqueLayers() throws {
         _ = NSApplication.shared
         let surface = PrivacySurface(screen: try XCTUnwrap(NSScreen.screens.first))

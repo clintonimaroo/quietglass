@@ -19,7 +19,7 @@ private final class NotchState: ObservableObject {
     @Published var edge: NotchEdge = .bottom
 }
 
-private enum NotchAction { case tracking, recenter, preview }
+private enum NotchAction { case tracking, recenter, preview, area }
 
 @MainActor
 final class NotchBarController: NSObject, NSWindowDelegate, NSPopoverDelegate {
@@ -32,6 +32,7 @@ final class NotchBarController: NSObject, NSWindowDelegate, NSPopoverDelegate {
     private let canvas = NSView()
     private var hostedBar: NSView!
     private let popover = NSPopover()
+    private weak var profilePicker: ProfilePickerController?
     private var screenObserver: NSObjectProtocol?
     private var controlsResizeObserver: NSObjectProtocol?
     private var workspaceObservers: [NSObjectProtocol] = []
@@ -187,7 +188,7 @@ final class NotchBarController: NSObject, NSWindowDelegate, NSPopoverDelegate {
         if entered {
             setExpanded(true)
             let position = state.edge.isVertical ? anchor.y + 24 - NSEvent.mouseLocation.y : NSEvent.mouseLocation.x - anchor.x + 24
-            showHint(position < 50 ? .tracking : position < 84 ? .recenter : .preview)
+            showHint(position < 50 ? .tracking : position < 84 ? .recenter : position < 118 ? .preview : .area)
         }
         else { scheduleCollapse() }
     }
@@ -196,7 +197,8 @@ final class NotchBarController: NSObject, NSWindowDelegate, NSPopoverDelegate {
         collapseTask?.cancel()
         collapseTask = Task { [weak self] in
             do { try await Task.sleep(nanoseconds: 120_000_000) } catch { return }
-            guard let self, !self.popover.isShown, !self.contextMenuOpen, self.dragOrigin == nil,
+            guard let self, !self.popover.isShown, self.profilePicker?.isVisible != true,
+                  !self.contextMenuOpen, self.dragOrigin == nil,
                   !self.panel.frame.contains(NSEvent.mouseLocation) else { return }
             self.showHint(nil)
             self.setExpanded(false)
@@ -238,7 +240,7 @@ final class NotchBarController: NSObject, NSWindowDelegate, NSPopoverDelegate {
         } else {
             panel.setFrame(frame, display: true)
         }
-        hostedBar.frame = NSRect(x: anchor.x - frame.minX - 24, y: anchor.y - frame.minY - 92, width: 116, height: 116)
+        hostedBar.frame = NSRect(x: anchor.x - frame.minX - 24, y: anchor.y - frame.minY - 126, width: 150, height: 150)
     }
 
     private func setDockEdge(_ edge: NotchEdge) {
@@ -260,7 +262,7 @@ final class NotchBarController: NSObject, NSWindowDelegate, NSPopoverDelegate {
         guard state.expanded else { hover(true); return }
         switch action {
         case .tracking:
-            if model.privacy.instant || model.previewing { model.dismissShield() }
+            if model.notchClearsProtection { model.dismissShield() }
             else if model.enabled { model.setEnabled(false) }
             else if !model.screenPermission || model.status == "Motion permission needed" { showControls() }
             else { model.setEnabled(true) }
@@ -268,6 +270,11 @@ final class NotchBarController: NSObject, NSWindowDelegate, NSPopoverDelegate {
             if model.canRecenter { model.recenter() } else { showControls() }
         case .preview:
             if !model.screenPermission { showControls() } else { preview() }
+        case .area:
+            closeControls()
+            showHint(nil)
+            model.privacy.chooseArea()
+            return
         }
         showHint(action)
     }
@@ -312,7 +319,8 @@ final class NotchBarController: NSObject, NSWindowDelegate, NSPopoverDelegate {
     private func showHint(_ action: NotchAction?) {
         hintGeneration += 1
         let generation = hintGeneration
-        guard let action, state.expanded, !popover.isShown, !contextMenuOpen, dragOrigin == nil else {
+        guard let action, state.expanded, !popover.isShown, profilePicker?.isVisible != true,
+              !contextMenuOpen, dragOrigin == nil else {
             hintedAction = nil
             guard hintPanel.isVisible else { return }
             NSAnimationContext.runAnimationGroup { context in
@@ -334,7 +342,7 @@ final class NotchBarController: NSObject, NSWindowDelegate, NSPopoverDelegate {
         let view = NSHostingView(rootView: NotchHintView(model: model, action: action))
         let size = view.fittingSize
         hintPanel.contentView = view
-        let offset: CGFloat = action == .tracking ? 0 : action == .recenter ? 43 : 77
+        let offset: CGFloat = action == .tracking ? 0 : action == .recenter ? 43 : action == .preview ? 77 : 111
         var x = anchor.x + offset - size.width / 2
         let visible = popupBounds()
         x = min(max(x, visible.minX + 8), visible.maxX - size.width - 8)
@@ -353,6 +361,7 @@ final class NotchBarController: NSObject, NSWindowDelegate, NSPopoverDelegate {
     }
 
     func showControls() {
+        profilePicker?.hide()
         closeContextMenu()
         show()
         setExpanded(true)
@@ -392,7 +401,24 @@ final class NotchBarController: NSObject, NSWindowDelegate, NSPopoverDelegate {
         if window.frame.origin != origin { window.setFrameOrigin(origin) }
     }
 
-    func closeControls() { popover.close(); closeContextMenu() }
+    func showProfiles(_ picker: ProfilePickerController) {
+        closeControls()
+        show()
+        setExpanded(true)
+        showHint(nil)
+        collapseTask?.cancel()
+        picker.show(relativeTo: canvas, fromControls: true, placement: { [weak self] size in
+            guard let self else { return .zero }
+            let controls = NotchDocking.frame(anchor: self.anchor, vertical: self.state.edge.isVertical, expanded: true)
+            return NotchDocking.popupFrame(size: size, controls: controls, edge: self.state.edge, in: self.popupBounds())
+        }, onDismiss: { [weak self] in
+            self?.profilePicker = nil
+            self?.scheduleCollapse()
+        })
+        profilePicker = picker
+    }
+
+    func closeControls() { profilePicker?.hide(); popover.close(); closeContextMenu() }
 
     func preview() {
         closeControls()
@@ -409,7 +435,7 @@ final class NotchBarController: NSObject, NSWindowDelegate, NSPopoverDelegate {
     }
 
     private func refreshDockPosition(animated: Bool) {
-        guard followsDock, dragOrigin == nil, !popover.isShown, !contextMenuOpen,
+        guard followsDock, dragOrigin == nil, !popover.isShown, profilePicker?.isVisible != true, !contextMenuOpen,
               let screen = panel.screen ?? NSScreen.main ?? NSScreen.screens.first else { return }
         let bottom = visibleDockTop(on: screen)
         let target = NSPoint(x: screen.frame.midX, y: bottom + 20)
@@ -572,6 +598,12 @@ private struct NotchBarView: View {
 
     var body: some View {
         ZStack(alignment: .topLeading) {
+            control(.area, icon: .area)
+                .scaleEffect(state.expanded ? 1 : 0.45)
+                .opacity(state.expanded ? 1 : 0)
+                .position(controlCenter(111, resting: 24))
+                .allowsHitTesting(state.expanded)
+                .accessibilityHidden(!state.expanded)
             control(.preview, icon: model.previewing ? .cancel : .viewOff)
                 .scaleEffect(state.expanded ? 1 : 0.45)
                 .opacity(state.expanded ? 1 : 0)
@@ -584,10 +616,10 @@ private struct NotchBarView: View {
                 .position(controlCenter(43, resting: 10))
                 .allowsHitTesting(state.expanded)
                 .accessibilityHidden(!state.expanded)
-            control(.tracking, icon: model.privacy.instant || model.previewing ? .cancel : model.enabled ? .pause : .view)
+            control(.tracking, icon: model.notchClearsProtection ? .cancel : model.enabled ? .pause : .view)
                 .position(x: 24, y: 24)
         }
-        .frame(width: 116, height: 116, alignment: .topLeading)
+        .frame(width: 150, height: 150, alignment: .topLeading)
         .contentShape(Rectangle())
         .onHover(perform: hover)
         .simultaneousGesture(DragGesture(minimumDistance: 4)
@@ -630,7 +662,7 @@ private struct NotchBarView: View {
     private func label(_ item: NotchAction) -> String {
         switch item {
         case .tracking:
-            if model.privacy.instant { return "Clear privacy shield" }
+            if model.privacy.fullScreen || model.privacy.focusEnabled || model.nearby.enabled { return "Clear privacy shield" }
             if model.previewing { return "Clear preview" }
             if model.enabled { return "Pause tracking" }
             if !model.screenPermission { return model.screenAccessAction }
@@ -638,6 +670,7 @@ private struct NotchBarView: View {
             return "Start tracking"
         case .recenter: return "Recenter"
         case .preview: return model.previewing ? "Clear preview" : "Preview blur"
+        case .area: return "Blur an area"
         }
     }
 }
@@ -652,6 +685,9 @@ private struct NotchHintView: View {
             if action == .recenter {
                 Text(model.shortcutLabel).foregroundStyle(Color(red: 0.94, green: 0.68, blue: 0.91))
             }
+            if action == .area, model.areaShortcutError == nil {
+                Text(model.areaShortcutLabel).foregroundStyle(Color(red: 0.94, green: 0.68, blue: 0.91))
+            }
         }
         .font(.system(size: 13))
         .foregroundStyle(.white)
@@ -664,7 +700,7 @@ private struct NotchHintView: View {
     private var label: String {
         switch action {
         case .tracking:
-            if model.privacy.instant { return "Clear privacy shield" }
+            if model.privacy.fullScreen || model.privacy.focusEnabled || model.nearby.enabled { return "Clear privacy shield" }
             if model.previewing { return "Clear preview" }
             if model.enabled { return "Pause tracking" }
             if !model.screenPermission { return model.screenAccessAction }
@@ -672,6 +708,7 @@ private struct NotchHintView: View {
             return "Start tracking"
         case .recenter: return "Recenter"
         case .preview: return model.previewing ? "Clear preview" : "Preview blur"
+        case .area: return "Blur an area"
         }
     }
 }
@@ -681,7 +718,6 @@ private struct NotchControlsView: View {
     let close: () -> Void
     let preview: () -> Void
     @State private var advanced = false
-
     var body: some View {
         VStack(alignment: .leading, spacing: 13) {
             HStack {
@@ -734,6 +770,22 @@ private struct NotchControlsView: View {
             }
 
             Divider().overlay(.white.opacity(0.06))
+            HStack(spacing: 10) {
+                    Image(systemName: model.currentProfile?.symbol ?? "square.stack.3d.up")
+                        .font(.system(size: 13, weight: .medium))
+                        .frame(width: 28, height: 28)
+                        .background(.white.opacity(0.10), in: Circle())
+                        .accessibilityHidden(true)
+                    Text("Profile").font(.system(size: 13, weight: .medium))
+                    Spacer()
+                    Text(model.currentProfile?.title ?? "Custom").font(.system(size: 12)).foregroundStyle(.secondary)
+                    Image(systemName: "chevron.right").font(.system(size: 10, weight: .medium)).foregroundStyle(.tertiary)
+                        .accessibilityHidden(true)
+                }
+                .frame(height: 34)
+                .contentShape(Rectangle())
+                .accessibilityHidden(true)
+                .overlay(ProfilePickerTrigger(model: model, fromControls: true))
             adjustment("Blur strength", value: $model.blur, range: 10...70, suffix: "")
             adjustment("Start blurring", value: $model.comfort, range: 2...30, suffix: "°")
 
@@ -790,7 +842,7 @@ private struct NotchControlsView: View {
     }
 
     private var hint: String {
-        if model.privacy.instant { return "\(model.status). Press Escape to clear it." }
+        if model.privacy.fullScreen || model.privacy.focusEnabled || model.nearby.enabled { return "\(model.status). Press Escape to clear it." }
         if model.status == "Motion permission needed" { return "Allow AirPods motion to start." }
         if !model.screenPermission { return "Allow screen access for the blur effect." }
         if model.previewing { return "Preview clears after five seconds. Click again or press Escape to clear sooner." }

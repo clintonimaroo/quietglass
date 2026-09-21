@@ -4,11 +4,12 @@ import CoreImage
 import ScreenCaptureKit
 
 final class DisplayCapture: NSObject, SCStreamOutput, SCStreamDelegate {
+    static let background = CGColor(gray: 0.08, alpha: 1)
     let id: UUID
     private var stream: SCStream!
     private let frameQueue = DispatchQueue(label: "local.clinton.QuietGlass.frames", qos: .userInteractive)
     private let renderQueue = DispatchQueue(label: "local.clinton.QuietGlass.blur", qos: .userInteractive)
-    private let context = CIContext(options: [.cacheIntermediates: false])
+    private let renderer = DisplayBlurRenderer()
     private let onFrame: @MainActor (CGImage) -> Void
     private let onFailure: @MainActor (Error) -> Void
     private let onSample: ((CVPixelBuffer) -> Void)?
@@ -80,11 +81,7 @@ final class DisplayCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         let radius = radius
         renderQueue.async { [self] in
             let image: CGImage? = autoreleasepool {
-                let input = CIImage(cvPixelBuffer: buffer)
-                let output = radius > 0 ? input.clampedToExtent()
-                    .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: radius])
-                    .cropped(to: input.extent) : input
-                return context.createCGImage(output, from: input.extent)
+                return renderer.render(CIImage(cvPixelBuffer: buffer), radius: radius)
             }
             frameQueue.async { [self] in
                 rendering = false

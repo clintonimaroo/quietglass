@@ -7,11 +7,13 @@ final class GlobalShortcuts {
     var onRecenter: (() -> Void)?
     var onEscape: (() -> Void)?
     var onPrivacy: (() -> Void)?
+    var onArea: (() -> Void)?
     var onPeek: ((Bool) -> Void)?
     private var recenterRef: EventHotKeyRef?
     private var escapeRef: EventHotKeyRef?
     private var privacyRef: EventHotKeyRef?
     private var peekRef: EventHotKeyRef?
+    private var areaRef: EventHotKeyRef?
     private var handler: EventHandlerRef?
     private let signature: OSType = 0x51474C53
 
@@ -31,6 +33,7 @@ final class GlobalShortcuts {
             if pressed, identifier.id == 2 { owner.onEscape?() }
             if pressed, identifier.id == 3 { owner.onPrivacy?() }
             if identifier.id == 4 { owner.onPeek?(pressed) }
+            if pressed, identifier.id == 5 { owner.onArea?() }
             return noErr
         }, 2, &types, Unmanaged.passUnretained(self).toOpaque(), &handler)
     }
@@ -39,6 +42,12 @@ final class GlobalShortcuts {
     func setPrivacyShortcut() -> Bool {
         if privacyRef != nil { return true }
         return RegisterEventHotKey(UInt32(kVK_ANSI_P), UInt32(controlKey | optionKey | cmdKey), EventHotKeyID(signature: signature, id: 3), GetApplicationEventTarget(), 0, &privacyRef) == noErr
+    }
+
+    @discardableResult
+    func setAreaShortcut() -> Bool {
+        if areaRef != nil { return true }
+        return RegisterEventHotKey(UInt32(kVK_ANSI_A), UInt32(controlKey | optionKey | cmdKey), EventHotKeyID(signature: signature, id: 5), GetApplicationEventTarget(), 0, &areaRef) == noErr
     }
 
     @discardableResult
@@ -78,6 +87,7 @@ final class GlobalShortcuts {
         if let escapeRef { UnregisterEventHotKey(escapeRef) }
         if let privacyRef { UnregisterEventHotKey(privacyRef) }
         if let peekRef { UnregisterEventHotKey(peekRef) }
+        if let areaRef { UnregisterEventHotKey(areaRef) }
         if let handler { RemoveEventHandler(handler) }
     }
 }

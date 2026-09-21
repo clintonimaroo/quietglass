@@ -6,9 +6,9 @@ import ShieldCore
 
 final class HeadSetupPanel: NSPanel {
     init() {
-        super.init(contentRect: NSRect(x: 0, y: 0, width: 420, height: 520),
+        super.init(contentRect: NSRect(x: 0, y: 0, width: 440, height: 568),
                    styleMask: [.titled, .closable], backing: .buffered, defer: false)
-        contentMinSize = NSSize(width: 420, height: 520)
+        contentMinSize = NSSize(width: 440, height: 568)
         contentMaxSize = contentMinSize
         standardWindowButton(.miniaturizeButton)?.isHidden = true
         standardWindowButton(.zoomButton)?.isHidden = true
@@ -16,7 +16,7 @@ final class HeadSetupPanel: NSPanel {
 
     func installContent(_ controller: NSViewController) {
         contentViewController = controller
-        setContentSize(NSSize(width: 420, height: 520))
+        setContentSize(NSSize(width: 440, height: 568))
     }
 
     override var canBecomeKey: Bool { true }
@@ -89,54 +89,67 @@ private struct HeadSetupView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("Head tracking").font(.system(size: 13, weight: .medium))
+                Text(stageName)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.55))
                 Spacer()
-                Text("Step \(stepLabel)").font(.system(size: 11)).monospacedDigit()
+                HStack(spacing: 5) {
+                    ForEach(0..<4) { index in
+                        Capsule()
+                            .fill(index < stage ? pink : .white.opacity(0.12))
+                            .frame(width: index == stage - 1 ? 22 : 12, height: 4)
+                    }
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Step \(stage) of 4")
             }
-            .foregroundStyle(.secondary)
-            .padding(.bottom, 22)
-            ring
-                .padding(.bottom, 20)
-            VStack(spacing: 9) {
-                Text(title).font(.system(size: 22, weight: .semibold)).contentTransition(.opacity)
+            .padding(.bottom, 20)
+            illustration
+                .frame(height: 196)
+                .padding(.bottom, 22)
+            VStack(spacing: 10) {
+                Text(title)
+                    .accessibilityAddTraits(.isHeader)
+                    .contentTransition(.opacity)
+                    .font(.system(size: 24, weight: .semibold))
+                    .tracking(-0.5)
+                    .foregroundStyle(.white.opacity(0.94))
                 Text(instructions)
                     .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
-                    .contentTransition(.opacity)
+                    .foregroundStyle(.white.opacity(0.55))
                     .lineSpacing(3)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            .frame(height: 94, alignment: .top)
+            .frame(maxWidth: 348)
+            .frame(height: 86, alignment: .top)
+            .id(phase)
+            .transition(reduceMotion ? .opacity : .opacity.combined(with: .offset(y: 5)))
             status
-                .padding(.horizontal, 14)
-                .padding(.vertical, 9)
-                .background(.white.opacity(0.035), in: Capsule())
-                .frame(height: 44)
-            Spacer(minLength: 12)
-            HStack(spacing: 10) {
-                if phase == .review {
-                    Button("Keep \(Int(model.comfort))°") { beginTest() }
-                        .buttonStyle(HeadSetupButtonStyle(primary: false))
-                        .frame(width: 86)
-                }
-                Button(primaryLabel, action: advance)
-                    .buttonStyle(HeadSetupButtonStyle(primary: true))
-                    .disabled(!canAdvance)
-                    .keyboardShortcut(.defaultAction)
-            }
+                .frame(maxWidth: .infinity)
+                .frame(height: 36)
+                .contentTransition(.opacity)
+            Spacer(minLength: 16)
+            Button(primaryLabel, action: advance)
+                .buttonStyle(HeadSetupButtonStyle(primary: true))
+                .disabled(!canAdvance)
+                .keyboardShortcut(.defaultAction)
             Text("AirPods motion · On your Mac · No camera")
                 .font(.system(size: 10))
-                .foregroundStyle(.secondary)
-                .padding(.top, 14)
+                .foregroundStyle(.white.opacity(0.35))
+                .padding(.top, 16)
         }
-        .padding(.horizontal, 28)
-        .padding(.top, 18)
-        .padding(.bottom, 22)
-        .frame(width: 420, height: 520)
-        .background(Color(white: 0.095))
+        .padding(.horizontal, 32)
+        .padding(.top, 16)
+        .padding(.bottom, 24)
+        .frame(width: 440, height: 568)
+        .background {
+            LinearGradient(colors: [Color(white: 0.115), Color(white: 0.085)],
+                           startPoint: .top, endPoint: .bottom)
+        }
         .preferredColorScheme(.dark)
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: phase)
+        .animation(reduceMotion ? nil : .smooth(duration: 0.3), value: phase)
+        .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: movement.completed)
         .onChange(of: model.canRecenter) { _, ready in
             if ready, phase == .connection { phase = .center; message = nil }
             if !ready, phase != .welcome, phase != .connection {
@@ -173,66 +186,137 @@ private struct HeadSetupView: View {
         }
     }
 
+    @ViewBuilder private var illustration: some View {
+        if phase == .test {
+            samplePreview
+                .transition(.opacity)
+        } else {
+            ring
+                .transition(.opacity)
+        }
+    }
+
     private var ring: some View {
         ZStack {
             Circle()
-                .fill(.white.opacity(0.025))
-                .overlay(Circle().strokeBorder(.white.opacity(0.05)))
-                .frame(width: 150, height: 150)
+                .fill(RadialGradient(colors: [.white.opacity(0.055), .white.opacity(0.012)],
+                                     center: .topLeading, startRadius: 0, endRadius: 160))
+                .overlay(Circle().strokeBorder(LinearGradient(
+                    colors: [.white.opacity(0.14), .white.opacity(0.02)],
+                    startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 0.7))
+                .frame(width: 154, height: 154)
             ForEach(0..<48, id: \.self) { index in
                 Capsule()
-                    .fill(segmentLit(index) ? pink : .white.opacity(0.18))
-                    .frame(width: 3, height: 9)
-                    .offset(y: -88)
+                    .fill(segmentLit(index) ? pink : .white.opacity(0.14))
+                    .frame(width: 2.5, height: segmentLit(index) ? 10 : 7)
+                    .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: segmentLit(index))
+                    .offset(y: -90)
                     .rotationEffect(.degrees(Double(index) * 7.5))
             }
-            if phase == .test, let image = Self.image {
-                Image(nsImage: image).resizable().scaledToFill()
-                    .frame(width: 146, height: 146)
-                    .blur(radius: testCoverage * model.blur / 3)
-                    .clipShape(Circle())
-                    .overlay(Circle().strokeBorder(.white.opacity(0.15)))
-                    .accessibilityLabel("Sample protection test")
-                    .accessibilityValue(testCoverage > 0.02 ? "Blurred" : "Clear")
+            if phase == .review, let angle = model.suggestedComfort {
+                VStack(spacing: 4) {
+                    Text("\(Int(angle))°")
+                        .font(.system(size: 42, weight: .light, design: .rounded))
+                        .foregroundStyle(pink)
+                    Text("Start angle").font(.system(size: 11)).foregroundStyle(.secondary)
+                }
+                .transition(.opacity)
+            } else if phase == .learning {
+                VStack(spacing: 7) {
+                    Text("\(max(0, Int(ceil(8 * (1 - model.learningProgress)))))")
+                        .font(.system(size: 42, weight: .light, design: .rounded))
+                        .monospacedDigit()
+                        .contentTransition(.numericText(countsDown: true))
+                        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: Int(ceil(8 * (1 - model.learningProgress))))
+                    Text("seconds remaining").font(.system(size: 10)).foregroundStyle(.secondary)
+                }
+            } else if phase == .movement, movement.isComplete {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 40, weight: .light))
+                    .foregroundStyle(pink)
+                    .transition(reduceMotion ? .opacity : .scale(scale: 0.85).combined(with: .opacity))
+                    .accessibilityLabel("All four directions checked")
             } else {
                 head
+                    .transition(.opacity)
             }
         }
-        .frame(width: 190, height: 190)
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: movement.completed)
+        .frame(width: 196, height: 196)
+        .accessibilityElement(children: .contain)
     }
 
     private var head: some View {
         ZStack {
-            Ellipse().stroke(.white.opacity(0.8), lineWidth: 2.5).frame(width: 82, height: 104)
-            HStack(spacing: 25) {
-                Capsule().frame(width: 4, height: 9)
-                Capsule().frame(width: 4, height: 9)
-            }.offset(y: -12)
+            HeadOutline()
+                .stroke(LinearGradient(colors: [.white.opacity(0.9), .white.opacity(0.5)],
+                                       startPoint: .top, endPoint: .bottom),
+                        style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+                .frame(width: 72, height: 92)
+            HStack(spacing: 23) {
+                Capsule().frame(width: 3.5, height: 7)
+                Capsule().frame(width: 3.5, height: 7)
+            }.offset(y: -9)
             Path { path in
-                path.move(to: CGPoint(x: 8, y: 0))
-                path.addLine(to: CGPoint(x: 8, y: 18))
-                path.addQuadCurve(to: CGPoint(x: 0, y: 21), control: CGPoint(x: 6, y: 24))
+                path.move(to: CGPoint(x: 7, y: 0))
+                path.addLine(to: CGPoint(x: 7, y: 15))
+                path.addQuadCurve(to: CGPoint(x: 0, y: 18), control: CGPoint(x: 5, y: 21))
             }
-            .stroke(style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
-            .frame(width: 10, height: 24)
-            .offset(x: 1, y: -2)
+            .stroke(style: StrokeStyle(lineWidth: 2, lineCap: .round))
+            .frame(width: 8, height: 20)
+            .offset(x: 1, y: 2)
             Path { path in
                 path.move(to: CGPoint(x: 0, y: 0))
-                path.addQuadCurve(to: CGPoint(x: 26, y: 0), control: CGPoint(x: 13, y: 12))
+                path.addQuadCurve(to: CGPoint(x: 18, y: 0), control: CGPoint(x: 9, y: 6))
             }
-            .stroke(style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
-            .frame(width: 26, height: 10)
-            .offset(y: 26)
+            .stroke(style: StrokeStyle(lineWidth: 2, lineCap: .round))
+            .frame(width: 18, height: 6)
+            .offset(y: 24)
+            ForEach([-1.0, 1.0], id: \.self) { side in
+                Capsule()
+                    .fill(model.connected ? pink : Color.white.opacity(0.5))
+                    .frame(width: 5, height: 17)
+                    .overlay(alignment: .top) {
+                        Circle().fill(model.connected ? pink : Color.white.opacity(0.7))
+                            .frame(width: 8, height: 8).offset(y: -2)
+                    }
+                    .offset(x: side * 39, y: 7)
+            }
         }
         .foregroundStyle(.white.opacity(0.8))
-        .rotation3DEffect(.degrees(reduceMotion ? 0 : -headYaw), axis: (x: 0, y: 1, z: 0))
-        .rotation3DEffect(.degrees(reduceMotion ? 0 : headPitch), axis: (x: 1, y: 0, z: 0))
-        .animation(reduceMotion ? nil : .interactiveSpring(response: 0.22, dampingFraction: 0.9), value: headYaw)
-        .animation(reduceMotion ? nil : .interactiveSpring(response: 0.22, dampingFraction: 0.9), value: headPitch)
+        .rotation3DEffect(.degrees(reduceMotion ? 0 : -headYaw), axis: (x: 0, y: 1, z: 0), perspective: 0.35)
+        .rotation3DEffect(.degrees(reduceMotion ? 0 : headPitch), axis: (x: 1, y: 0, z: 0), perspective: 0.35)
+        .animation(reduceMotion ? nil : .interactiveSpring(response: 0.24, dampingFraction: 0.86), value: headYaw)
+        .animation(reduceMotion ? nil : .interactiveSpring(response: 0.24, dampingFraction: 0.86), value: headPitch)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Live head position")
         .accessibilityValue("Horizontal \(Int(headYaw)) degrees, vertical \(Int(headPitch)) degrees")
+    }
+
+    private var samplePreview: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 4) {
+                ForEach(0..<3) { _ in Circle().fill(.white.opacity(0.2)).frame(width: 5, height: 5) }
+                Spacer()
+                Image(systemName: "lock.shield").font(.system(size: 10)).foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 12)
+            .frame(height: 26)
+            if let image = Self.image {
+                Image(nsImage: image).resizable().scaledToFill()
+                    .frame(width: 280, height: 148)
+                    .blur(radius: testCoverage * model.blur / 3)
+                    .clipped()
+            }
+        }
+        .frame(width: 280)
+        .background(Color(white: 0.16))
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(.white.opacity(0.12)))
+        .shadow(color: .black.opacity(0.22), radius: 14, y: 8)
+        .animation(reduceMotion ? nil : .smooth(duration: 0.2), value: testCoverage)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Sample protection test")
+        .accessibilityValue(testCoverage > 0.02 ? "Blurred" : "Clear")
     }
 
     @ViewBuilder private var status: some View {
@@ -247,11 +331,13 @@ private struct HeadSetupView: View {
             Text(movement.isComplete ? "All directions checked" : "\(movement.completed.count) of 4 directions checked")
                 .font(.system(size: 12, weight: .medium)).foregroundStyle(pink)
         } else if phase == .learning {
-            Text("\(max(0, Int(ceil(8 * (1 - model.learningProgress))))) seconds remaining")
-                .font(.system(size: 12)).monospacedDigit().foregroundStyle(pink)
-        } else if phase == .review, let angle = model.suggestedComfort {
-            Text("Suggested start angle: \(Int(angle))°")
-                .font(.system(size: 15, weight: .medium)).foregroundStyle(pink)
+            Text("Head blur is paused during setup")
+                .font(.system(size: 12)).foregroundStyle(.secondary)
+        } else if phase == .review {
+            Button("Keep my current \(Int(model.comfort))°") { beginTest() }
+                .buttonStyle(.plain)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.white.opacity(0.6))
         } else if phase == .test {
             Text(testedCenter && isCentered ? "Motion check complete" : testedAway ? "Face forward to clear the sample" : "Turn until the sample begins to blur")
                 .font(.system(size: 12)).foregroundStyle(pink).multilineTextAlignment(.center)
@@ -274,12 +360,35 @@ private struct HeadSetupView: View {
         }
     }
 
-    private var stepLabel: String {
+    private var stage: Int {
         switch phase {
-        case .welcome, .connection, .center: return "1 of 4"
-        case .movement: return "2 of 4"
-        case .readyToLearn, .learning, .review: return "3 of 4"
-        case .test: return "4 of 4"
+        case .welcome, .connection, .center: return 1
+        case .movement: return 2
+        case .readyToLearn, .learning, .review: return 3
+        case .test: return 4
+        }
+    }
+
+    private var stageName: String {
+        switch stage {
+        case 1: return "Get connected"
+        case 2: return "Check your motion"
+        case 3: return "Find your range"
+        default: return "Try your protection"
+        }
+    }
+
+    private var nextDirection: HeadSetupDirection? {
+        [.left, .right, .up, .down].first { !movement.completed.contains($0) }
+    }
+
+    private var directionName: String {
+        switch nextDirection {
+        case .left: return "left"
+        case .right: return "right"
+        case .up: return "up"
+        case .down: return "down"
+        case nil: return "forward"
         }
     }
 
@@ -288,7 +397,7 @@ private struct HeadSetupView: View {
         case .welcome: return model.hasCompletedHeadSetup ? "Recalibrate head tracking" : "Set up head tracking"
         case .connection: return "Connect your AirPods"
         case .center: return "Face your screen"
-        case .movement: return movement.isComplete ? "Movement looks good" : "Follow the ring"
+        case .movement: return movement.isComplete ? "Movement looks good" : "Look gently \(directionName)"
         case .readyToLearn, .learning: return "Find your comfortable range"
         case .review: return "Choose your sensitivity"
         case .test: return testedCenter && isCentered ? "You're ready" : "Try your blur"
@@ -297,17 +406,17 @@ private struct HeadSetupView: View {
 
     private var instructions: String {
         switch phase {
-        case .welcome: return "A quick motion check will help QuietGlass recognize when you look away. Head blur pauses during setup."
-        case .connection: return "Wear at least one AirPod connected to this Mac. Keep it in while you complete setup."
-        case .center: return "Sit comfortably and look at the middle of your screen. This will be your forward position."
+        case .welcome: return "Teach QuietGlass your natural head movement, then try looking away to blur."
+        case .connection: return "Wear your AirPods and connect them to this Mac. Setup continues when motion is ready."
+        case .center: return "Sit comfortably and look straight ahead. We’ll use this as your center position."
         case .movement: return movement.isComplete
-            ? "Your motion is responding well. Next, we'll find a comfortable range for everyday use."
-            : "Slowly look left, right, up, and down. Pause briefly in each direction to fill the ring."
-        case .readyToLearn, .learning: return "Look at your screen and read normally for eight seconds. Small, natural movements help set your sensitivity."
-        case .review: return "Use the suggested angle or keep your current setting. You can adjust it later."
+            ? "All four directions are checked. Next, let’s find your comfortable range."
+            : "Turn slowly and hold for a moment. The ring fills as your AirPods detect each direction."
+        case .readyToLearn, .learning: return "Read your screen naturally for eight seconds. Small movements help us find the right balance."
+        case .review: return "Your screen stays clear within this range. Look further away and the blur begins."
         case .test: return testedCenter && isCentered
-            ? "The sample blurred when you looked away and cleared when you returned. You're all set."
-            : "Look away to blur the sample, then face forward to clear it. Only this preview will change."
+            ? "The preview blurred when you looked away and cleared when you returned."
+            : "Look away, then face your screen again. Try it safely here before protecting your desktop."
         }
     }
 
@@ -374,19 +483,47 @@ private struct HeadSetupView: View {
     private var headPitch: Double { model.calibrated && model.offset.pitch.isFinite ? max(-25, min(25, model.offset.pitch)) : 0 }
 }
 
+private struct HeadOutline: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.midX, y: rect.minY))
+        path.addCurve(to: CGPoint(x: rect.maxX, y: rect.height * 0.4),
+                      control1: CGPoint(x: rect.width * 0.85, y: 0),
+                      control2: CGPoint(x: rect.maxX, y: rect.height * 0.18))
+        path.addCurve(to: CGPoint(x: rect.midX, y: rect.maxY),
+                      control1: CGPoint(x: rect.maxX, y: rect.height * 0.76),
+                      control2: CGPoint(x: rect.width * 0.76, y: rect.maxY))
+        path.addCurve(to: CGPoint(x: rect.minX, y: rect.height * 0.4),
+                      control1: CGPoint(x: rect.width * 0.24, y: rect.maxY),
+                      control2: CGPoint(x: 0, y: rect.height * 0.76))
+        path.addCurve(to: CGPoint(x: rect.midX, y: rect.minY),
+                      control1: CGPoint(x: 0, y: rect.height * 0.18),
+                      control2: CGPoint(x: rect.width * 0.15, y: 0))
+        path.closeSubpath()
+        return path
+    }
+}
+
 private struct HeadSetupButtonStyle: ButtonStyle {
     let primary: Bool
+    @State private var hovering = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.isEnabled) private var isEnabled
     private let pink = Color(red: 0.94, green: 0.68, blue: 0.91)
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 13, weight: .medium))
-            .frame(maxWidth: .infinity, minHeight: 40)
+            .frame(maxWidth: .infinity, minHeight: 44)
             .foregroundStyle(primary && isEnabled ? Color.black : Color.white.opacity(isEnabled ? 0.8 : 0.4))
             .background(primary && isEnabled ? pink : Color(white: 0.14), in: Capsule())
             .overlay(Capsule().strokeBorder(.white.opacity(primary && isEnabled ? 0 : 0.07)))
-            .opacity(configuration.isPressed ? 0.8 : 1)
+            .brightness(hovering && isEnabled ? 0.035 : 0)
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.985 : 1)
+            .opacity(configuration.isPressed ? 0.85 : 1)
             .contentShape(Capsule())
+            .onHover { hovering = $0 }
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: configuration.isPressed)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: hovering)
     }
 }

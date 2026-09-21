@@ -4,11 +4,23 @@ import AppKit
 import SwiftUI
 
 enum AppIcon: CaseIterable {
-    case view, viewOff, play, pause, cancel, airpods, chevronDown, drag, clock, settings, controls, focus, dockBottom
+    case view, viewOff, play, pause, cancel, airpods, chevronDown, drag, clock, settings, controls, focus, dockBottom, area
 
     var path: Path {
         var path = Path()
         switch self {
+        case .area:
+            for corner in [CGPoint(x: 3, y: 3), CGPoint(x: 21, y: 3), CGPoint(x: 21, y: 21), CGPoint(x: 3, y: 21)] {
+                let x: CGFloat = corner.x == 3 ? 1 : -1
+                let y: CGFloat = corner.y == 3 ? 1 : -1
+                path.move(to: CGPoint(x: corner.x, y: corner.y + y * 5))
+                path.addLine(to: corner)
+                path.addLine(to: CGPoint(x: corner.x + x * 5, y: corner.y))
+            }
+            for x: CGFloat in [8, 12, 16] {
+                path.move(to: CGPoint(x: x, y: 9))
+                path.addLine(to: CGPoint(x: x, y: 15))
+            }
         case .view:
             path.move(to: CGPoint(x: 21.544, y: 11.045))
             path.addCurve(to: CGPoint(x: 22, y: 12), control1: CGPoint(x: 21.848, y: 11.4713), control2: CGPoint(x: 22, y: 11.6845))

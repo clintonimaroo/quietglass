@@ -10,6 +10,10 @@ else
     quietglass_app="../Build.noindex/QuietGlass.app"
     quietglass_archive="../QuietGlass.zip"
 fi
+if [[ "$quietglass_app" != *.app ]]; then
+    printf '%s\n' 'The build output must be an .app bundle path.' >&2
+    exit 1
+fi
 quietglass_signing_identity="${QUIETGLASS_SIGN_IDENTITY:-}"
 if [[ -z "$quietglass_signing_identity" ]]; then
     quietglass_signing_identity="$(security find-identity -v -p codesigning | /usr/bin/awk '/"QuietGlass Local Development"/ { print $2; exit }')"
@@ -38,8 +42,16 @@ xcrun actool Resources/AppIcon/QuietGlass.icon \
     --output-format human-readable-text --warnings --errors
 /usr/libexec/PlistBuddy -c "Merge $quietglass_stage/icon-info.plist" "$quietglass_staged_app/Contents/Info.plist"
 codesign --force --sign "$quietglass_signing_identity" --identifier local.clinton.QuietGlass "$quietglass_staged_app"
+quietglass_team="$(codesign -dv "$quietglass_staged_app" 2>&1 | /usr/bin/awk -F= '/^TeamIdentifier=/ { print $2 }')"
+if [[ -n "$quietglass_team" && "$quietglass_team" != "not set" ]]; then
+    python3 scripts/build-intents.py "$quietglass_bin_dir" "$quietglass_staged_app/Contents/Resources"
+    codesign --force --sign "$quietglass_signing_identity" --identifier local.clinton.QuietGlass "$quietglass_staged_app"
+else
+    printf '%s\n' 'Shortcuts actions omitted: execution requires an Apple-signed developer identity with a Team ID.'
+fi
 codesign --verify --strict "$quietglass_staged_app"
 mkdir -p "$(dirname "$quietglass_app")"
+if [[ -d "$quietglass_app" ]]; then rm -rf "$quietglass_app"; fi
 ditto --norsrc --noextattr "$quietglass_staged_app" "$quietglass_app"
 ditto -c -k --keepParent --norsrc --noextattr "$quietglass_staged_app" "$quietglass_archive"
 printf 'Built %s and %s\n' "$quietglass_app" "$quietglass_archive"

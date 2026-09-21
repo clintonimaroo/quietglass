@@ -2,6 +2,7 @@
 
 import AppKit
 import Combine
+import ShieldCore
 
 @main
 struct QuietGlassApp {
@@ -21,15 +22,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var notch: NotchBarController!
     private var privacySettings: PrivacySettingsController!
     private var headSetup: HeadSetupController!
+    private var profilePicker: ProfilePickerController!
     private var keyMonitor: Any?
     private var observation: AnyCancellable?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         model = AppModel()
+        QuietGlassIntentBridge.model = model
+        if Bundle.main.url(forResource: "Metadata", withExtension: "appintents") != nil {
+            QuietGlassShortcuts.updateAppShortcutParameters()
+        }
         notch = NotchBarController(model: model)
         privacySettings = PrivacySettingsController(model: model)
         headSetup = HeadSetupController(model: model)
+        profilePicker = ProfilePickerController(model: model)
+        model.onShowProfiles = { [weak self] anchor, fromControls in
+            guard let self else { return }
+            if fromControls { self.notch.showProfiles(self.profilePicker) }
+            else { self.profilePicker.show(relativeTo: anchor, fromControls: false) }
+        }
+        model.privacy.onPrepareAreaSelection = { [weak self] in
+            self?.notch.closeControls()
+            self?.privacySettings.hideForAreaSelection()
+        }
         model.onOpenPrivacySettings = { [weak self] in self?.showPrivacySettings() }
+        model.onOpenProfileSettings = { [weak self] in self?.notch.closeControls(); self?.privacySettings.showProfiles() }
+        model.onOpenControls = { [weak self] in
+            self?.privacySettings.hideForAreaSelection()
+            self?.notch.showControls()
+        }
         model.onRequestHeadSetup = { [weak self] in self?.notch.closeControls(); self?.headSetup.show() }
         model.onCancelHeadSetup = { [weak self] in self?.headSetup.close() }
         let mainMenu = NSMenu()
@@ -40,8 +61,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         item("Quit QuietGlass", #selector(quit), in: applicationMenu, key: "q")
         applicationItem.submenu = applicationMenu
         mainMenu.addItem(applicationItem)
+        let editItem = NSMenuItem(title: "Edit", action: nil, keyEquivalent: "")
+        let editMenu = NSMenu(title: "Edit")
+        editMenu.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        let redo = editMenu.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "z")
+        redo.keyEquivalentModifierMask = [.command, .shift]
+        editMenu.addItem(.separator())
+        editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editItem.submenu = editMenu
+        mainMenu.addItem(editItem)
         let viewItem = NSMenuItem(title: "View", action: nil, keyEquivalent: "")
         let viewMenu = NSMenu(title: "View")
+        let sidebar = item("Toggle Sidebar", #selector(toggleSettingsSidebar), in: viewMenu, key: "s")
+        sidebar.keyEquivalentModifierMask = [.command]
+        viewMenu.addItem(.separator())
         let fullScreen = NSMenuItem(title: "Enter Full Screen", action: #selector(NSWindow.toggleFullScreen(_:)), keyEquivalent: "f")
         fullScreen.keyEquivalentModifierMask = [.control, .command]
         viewMenu.addItem(fullScreen)
@@ -96,12 +132,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         title.isEnabled = false
         menu.addItem(title)
         menu.addItem(.separator())
+        let profiles = NSMenuItem(title: "Profile", action: nil, keyEquivalent: "")
+        let profileMenu = NSMenu(title: "Profile")
+        for profile in PrivacyProfile.allCases {
+            let entry = item(profile.title, #selector(selectProfile(_:)), in: profileMenu)
+            entry.representedObject = profile.rawValue
+            entry.state = model.currentProfile == profile ? .on : .off
+        }
+        profiles.submenu = profileMenu
+        menu.addItem(profiles)
         item("Control", #selector(showControls), in: menu)
         item("Settings…", #selector(showPrivacySettings), in: menu)
         item(notch.isVisible ? "Hide Notch" : "Show Notch", #selector(toggleNotch), in: menu)
         item("Move Notch Down", #selector(resetNotch), in: menu)
         menu.addItem(.separator())
         item(model.privacy.instant ? "Clear Privacy Blur" : "Blur Screen", #selector(togglePrivacy), in: menu, shortcut: "⌃⌥⌘P")
+        item("Blur an Area", #selector(chooseArea), in: menu, shortcut: model.areaShortcutLabel)
         item(model.enabled ? "Pause Head Tracking" : "Start Head Tracking", #selector(toggleTracking), in: menu)
         let center = item("Center My Gaze", #selector(recenter), in: menu, shortcut: model.shortcutLabel)
         center.isEnabled = model.canRecenter
@@ -120,13 +166,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return entry
     }
 
+    @objc private func selectProfile(_ sender: NSMenuItem) {
+        if let raw = sender.representedObject as? String, let profile = PrivacyProfile(rawValue: raw) { model.applyProfile(profile) }
+    }
+
+    @objc private func toggleSettingsSidebar() { privacySettings.toggleSidebar() }
     @objc private func showControls() { notch.showControls() }
     @objc private func showPrivacySettings() { notch.closeControls(); privacySettings.show() }
     @objc private func togglePrivacy() { model.toggleInstantShield() }
+    @objc private func chooseArea() { model.privacy.chooseArea() }
     @objc private func toggleNotch() { notch.toggleVisibility() }
     @objc private func resetNotch() { notch.resetPosition(); notch.show() }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { privacySettings.show(); notch.show(); return true }
     func applicationWillTerminate(_ notification: Notification) {
+        profilePicker.hide()
         model.shutdown()
         notch.shutdown()
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }

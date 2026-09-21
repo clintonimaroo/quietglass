@@ -10,11 +10,13 @@ final class LocalTextAnalyzer {
     private var busy = false
     private var lastScan: TimeInterval = 0
     private var cancelled = false
+    private let phrases: [String]
     private let options: SensitiveTextOptions
     private let completion: @MainActor (Result<[CGRect], Error>) -> Void
 
-    init(options: SensitiveTextOptions, completion: @escaping @MainActor (Result<[CGRect], Error>) -> Void) {
+    init(options: SensitiveTextOptions, phrases: [String] = [], completion: @escaping @MainActor (Result<[CGRect], Error>) -> Void) {
         self.options = options
+        self.phrases = phrases
         self.completion = completion
     }
 
@@ -39,7 +41,7 @@ final class LocalTextAnalyzer {
                     request.usesLanguageCorrection = false
                     request.recognitionLanguages = ["en-US"]
                     try VNImageRequestHandler(cvPixelBuffer: buffer, options: [:]).perform([request])
-                    return Self.regions(in: request.results ?? [], options: options)
+                    return Self.regions(in: request.results ?? [], options: options, phrases: phrases)
                 }
             }
             lock.lock()
@@ -50,10 +52,10 @@ final class LocalTextAnalyzer {
         }
     }
 
-    static func regions(in observations: [VNRecognizedTextObservation], options: SensitiveTextOptions) -> [CGRect] {
+    static func regions(in observations: [VNRecognizedTextObservation], options: SensitiveTextOptions, phrases: [String] = []) -> [CGRect] {
         observations.flatMap { observation -> [CGRect] in
             guard let candidate = observation.topCandidates(1).first else { return [] }
-            return SensitiveText.ranges(in: candidate.string, options: options).compactMap { match in
+            return SensitiveText.ranges(in: candidate.string, options: options, phrases: phrases).compactMap { match in
                 guard let range = Range(match, in: candidate.string) else { return nil }
                 let box = (try? candidate.boundingBox(for: range))?.boundingBox ?? observation.boundingBox
                 return box.insetBy(dx: -0.003, dy: -0.004).intersection(CGRect(x: 0, y: 0, width: 1, height: 1))

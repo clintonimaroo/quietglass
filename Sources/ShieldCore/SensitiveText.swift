@@ -19,7 +19,7 @@ public enum SensitiveText {
     private static let email = try! NSRegularExpression(pattern: #"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b"#)
     private static let card = try! NSRegularExpression(pattern: #"(?<!\d)(?:\d[ -]?){12,18}\d(?!\d)"#)
 
-    public static func ranges(in text: String, options: SensitiveTextOptions) -> [NSRange] {
+    public static func ranges(in text: String, options: SensitiveTextOptions, phrases: [String] = []) -> [NSRange] {
         let entire = NSRange(text.startIndex..<text.endIndex, in: text)
         var ranges: [NSRange] = []
         if options.contains(.credentials) {
@@ -32,7 +32,23 @@ public enum SensitiveText {
                 return isPaymentCard(String(text[range]))
             }.map(\.range)
         }
+        for phrase in cleanPhrases(phrases) {
+            var search = text.startIndex..<text.endIndex
+            while let match = text.range(of: phrase, options: [.caseInsensitive, .diacriticInsensitive], range: search) {
+                ranges.append(NSRange(match, in: text))
+                search = match.upperBound..<text.endIndex
+            }
+        }
         return ranges
+    }
+
+    public static func cleanPhrases(_ phrases: [String]) -> [String] {
+        var seen = Set<String>()
+        return Array(phrases.compactMap { value -> String? in
+            let phrase = String(value.trimmingCharacters(in: .whitespacesAndNewlines).prefix(200))
+            guard !phrase.isEmpty, seen.insert(phrase.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)).inserted else { return nil }
+            return phrase
+        }.prefix(50))
     }
 
     public static func isPaymentCard(_ text: String) -> Bool {

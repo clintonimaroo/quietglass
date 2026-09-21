@@ -21,7 +21,16 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
     @Published private(set) var restarting = false
     @Published private(set) var previewing = false
     @Published private(set) var shortcutError: String?
+    @Published private(set) var areaShortcutError: String?
+    let areaShortcutLabel = "⌃⌥⌘A"
     @Published var recordingShortcut = false
+    @Published var demoMode: Bool {
+        didSet {
+            UserDefaults.standard.set(demoMode, forKey: "includeBlurInCaptures")
+            overlay.includeInCaptures = demoMode
+            privacy.includeInCaptures = demoMode
+        }
+    }
     @Published var comfort: Double { didSet { save("comfort", comfort); refreshResponse() } }
     @Published var transition: Double { didSet { save("transition", transition); refreshResponse() } }
     @Published var blur: Double { didSet { save("blur", blur); privacy.blurRadius = blur } }
@@ -33,8 +42,22 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
     @Published private(set) var learningNotice: String?
     @Published private(set) var headSetupActive = false
 
+    @Published var perDisplayTracking = false {
+        didSet { displayTracking.invalidate(); displayCalibrationIDs = []; clearOverlay(); updateShield() }
+    }
+    @Published private(set) var displayCalibrationIDs = Set<UInt32>()
+    @Published private(set) var displayCalibrationNotice: String?
+    private var displayTracking = DisplayHeadTracking()
+    private var displayCalibrationTask: Task<Void, Never>?
+    private var displayLayout: [UInt32: CGRect] = [:]
+
     let privacy = PrivacyController()
+    let nearby = NearbyPeople()
+    private var nearbyObservation: AnyCancellable?
     var onOpenPrivacySettings: (() -> Void)?
+    var onOpenControls: (() -> Void)?
+    var onOpenProfileSettings: (() -> Void)?
+    var onShowProfiles: ((NSView, Bool) -> Void)?
     var onRequestHeadSetup: (() -> Void)?
     var onCancelHeadSetup: (() -> Void)?
 
@@ -75,6 +98,7 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
 
     override init() {
         let prefs = UserDefaults.standard
+        demoMode = prefs.bool(forKey: "includeBlurInCaptures")
         comfort = prefs.object(forKey: "comfort") == nil ? 15 : max(2, min(30, prefs.double(forKey: "comfort")))
         transition = prefs.object(forKey: "transition") == nil ? 18 : max(5, min(30, prefs.double(forKey: "transition")))
         blur = prefs.object(forKey: "blur") == nil ? 28 : max(10, min(70, prefs.double(forKey: "blur")))
@@ -82,7 +106,15 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
         keyModifiers = prefs.object(forKey: "shortcutModifiers") == nil ? UInt32(controlKey | optionKey | cmdKey) : UInt32(prefs.integer(forKey: "shortcutModifiers"))
         shortcutLabel = prefs.string(forKey: "shortcutLabel") ?? "⌃⌥⌘C"
         super.init()
+        nearby.onCoverage = { [weak self] value in self?.privacy.setNearbyCovered(value) }
+        nearby.onMonitoring = { [weak self] value in self?.privacy.setNearbyMonitoring(value) }
+        nearbyObservation = nearby.$message.receive(on: RunLoop.main).sink { [weak self] _ in
+            self?.objectWillChange.send()
+            self?.updateShield()
+        }
         privacy.blurRadius = blur
+        overlay.includeInCaptures = demoMode
+        privacy.includeInCaptures = demoMode
         if screenPermission { UserDefaults.standard.set(true, forKey: "screenAccessPreviouslyGranted") }
         motion.delegate = self
         refreshResponse()
@@ -92,6 +124,7 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
             if self.headSetupActive { self.onCancelHeadSetup?() } else { self.dismissShield() }
         }
         shortcuts.onPrivacy = { [weak self] in self?.toggleInstantShield() }
+        shortcuts.onArea = { [weak self] in self?.privacy.chooseArea() }
         shortcuts.onPeek = { [weak self] value in self?.privacy.setPeeking(value) }
         overlay.onClear = { [weak self] in self?.refreshEscape() }
         privacy.requestEscape = { [weak self] in self?.shortcuts.armEscape(true) ?? false }
@@ -111,6 +144,9 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
         if !shortcuts.setPrivacyShortcut() {
             privacyShortcutError = "⌃⌥⌘P is in use by another app. Use Shield screen in the menu instead."
         }
+        if !shortcuts.setAreaShortcut() {
+            areaShortcutError = "⌃⌥⌘A is in use by another app. Use Choose area or the notch button."
+        }
         overlay.onCaptureStatus = { [weak self] notice in
             if self?.captureNotice != notice { self?.captureNotice = notice }
         }
@@ -126,7 +162,7 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
             shortcutError = "The recenter shortcut is in use. Record a different one."
         }
         observers.append(NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor in self?.overlay.reconcileScreens() }
+            Task { @MainActor in self?.refreshDisplays() }
         })
         observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.overlay.activeSpaceChanged() }
@@ -148,6 +184,7 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
         timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.heartbeat() }
         }
+        refreshDisplays()
         privacy.start()
     }
 
@@ -156,6 +193,78 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
     var hasCompletedHeadSetup: Bool { UserDefaults.standard.bool(forKey: "headSetupCompleted.v1") }
     var screenAccessPreviouslyGranted: Bool { UserDefaults.standard.bool(forKey: "screenAccessPreviouslyGranted") }
     var screenAccessAction: String { screenAccessPreviouslyGranted ? "Restore screen access" : "Allow screen access" }
+
+    var connectedDisplays: [(id: UInt32, name: String)] {
+        NSScreen.screens.compactMap { screen in
+            guard let id = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value else { return nil }
+            return (id, screen.localizedName)
+        }
+    }
+
+    func calibrateDisplay(_ id: UInt32) {
+        displayCalibrationTask?.cancel()
+        displayCalibrationTask = Task { [weak self] in
+            for second in stride(from: 3, through: 1, by: -1) {
+                guard let self else { return }
+                self.displayCalibrationNotice = "Face the selected display · \(second)"
+                do { try await Task.sleep(nanoseconds: 1_000_000_000) } catch { return }
+            }
+            guard let self, self.perDisplayTracking, self.canRecenter, let latest = self.latest,
+                  self.connectedDisplays.contains(where: { $0.id == id }) else {
+                self?.displayCalibrationNotice = "Motion unavailable. Connect your AirPods and try again."
+                return
+            }
+            if !self.calibrated { self.recenter() }
+            self.displayTracking.calibrate(id, at: latest)
+            self.displayCalibrationIDs = Set(self.displayTracking.centers.keys)
+            self.displayCalibrationNotice = "Display centered. Repeat for your other displays."
+            self.updateShield()
+        }
+    }
+
+    private func refreshDisplays() {
+        let layout = Dictionary(uniqueKeysWithValues: NSScreen.screens.compactMap { screen -> (UInt32, CGRect)? in
+            guard let id = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value else { return nil }
+            return (id, screen.frame)
+        })
+        if !displayLayout.isEmpty, displayLayout != layout { invalidateDisplayCalibration() }
+        displayLayout = layout
+        overlay.reconcileScreens()
+    }
+
+    private func invalidateDisplayCalibration() {
+        displayCalibrationTask?.cancel(); displayCalibrationTask = nil
+        displayTracking.invalidate()
+        displayCalibrationIDs = []
+        if perDisplayTracking { displayCalibrationNotice = "Head motion changed. Center each display again." }
+    }
+
+    var currentProfile: PrivacyProfile? {
+        if privacy.focusEnabled { return .focus }
+        return PrivacyProfile.allCases.first { $0 != .focus && $0.settings.comfort == comfort && $0.settings.transition == transition && $0.settings.blur == blur }
+    }
+
+    var notchClearsProtection: Bool {
+        previewing || privacy.fullScreen || privacy.focusEnabled || nearby.enabled
+    }
+
+    func applyProfile(_ profile: PrivacyProfile) {
+        comfort = profile.settings.comfort
+        transition = profile.settings.transition
+        blur = profile.settings.blur
+        setFocus(profile == .focus)
+        updateShield()
+    }
+
+    func setFocus(_ value: Bool) {
+        if value { stop() }
+        privacy.setFocus(value)
+    }
+
+    func setNearbyPeople(_ value: Bool) {
+        if value, !screenPermission { requestScreenPermission(); return }
+        nearby.setEnabled(value)
+    }
 
     func setEnabled(_ value: Bool) {
         if value { start() } else { stop() }
@@ -182,6 +291,7 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
 
     func stop() {
         cancelLearning()
+        invalidateDisplayCalibration()
         enabled = false
         motion.stopDeviceMotionUpdates()
         motion.stopConnectionStatusUpdates()
@@ -203,6 +313,7 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
     private func beginMotionIfAvailable() {
         guard enabled, !motion.isDeviceMotionActive, motion.isDeviceMotionAvailable else { return }
         motionReferenceGeneration += 1
+        invalidateDisplayCalibration()
         motion.startDeviceMotionUpdates(to: .main) { [weak self] sample, error in
             guard let self, self.enabled else { return }
             if let error {
@@ -219,6 +330,7 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
         guard q.x.isFinite, q.y.isFinite, q.z.isFinite, q.w.isFinite else { return }
         if let previous = sourceLocation, previous != sample.sensorLocation {
             motionReferenceGeneration += 1
+            invalidateDisplayCalibration()
             cancelLearning(message: "The active AirPod changed. Recenter and try again.")
             center = nil
             calibrated = false
@@ -250,6 +362,7 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
             return
         }
         center = latest
+        if perDisplayTracking, let facing = displayTracking.facing { displayTracking.calibrate(facing, at: latest) }
         calibrated = true
         everCalibrated = true
         pendingCalibration = false
@@ -263,9 +376,11 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
     }
 
     func dismissShield() {
+        nearby.stop()
         cancelLearning()
         stopPreview()
         response.dismiss()
+        displayTracking.dismiss()
         dismissedForLoss = true
         privacy.dismissAll()
         clearOverlay()
@@ -274,17 +389,23 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
     }
 
     private func updateShield() {
-        if privacy.instant {
+        if privacy.fullScreen {
             stopPreview()
             if privacy.captureUnavailable { status = "Privacy capture needs attention" }
             else if !privacy.ready { status = "Preparing privacy blur" }
-            else { status = privacy.peeking ? "Peeking at your screen" : "Privacy blur is on" }
+            else { status = privacy.nearbyCovered ? "Covered · Additional face detected" : privacy.peeking ? "Peeking at your screen" : "Privacy blur is on" }
             return
         }
         guard !previewing else { return }
         if learning { clearOverlay(); status = "Learning your normal movement"; return }
         if headSetupActive { clearOverlay(); status = "Setting up head tracking"; return }
-        guard enabled else { clearOverlay(); return }
+        guard enabled else {
+            clearOverlay()
+            if privacy.focusEnabled { status = "Focus mode is on" }
+            else if nearby.enabled || nearby.requesting { status = nearby.message }
+            else { status = "Ready when you are" }
+            return
+        }
         if privacy.ruleMode == .pause {
             clearOverlay()
             status = "Head blur paused for \(privacy.frontAppName)"
@@ -297,6 +418,15 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
             } else { clearOverlay() }
             return
         }
+        if perDisplayTracking, !connectedDisplays.isEmpty, connectedDisplays.allSatisfy({ displayCalibrationIDs.contains($0.id) }), let latest {
+            let settings = privacy.ruleMode.settings(comfort: comfort, transition: transition, blur: blur)
+            let values = displayTracking.coverage(current: latest, displays: connectedDisplays.map(\.id),
+                                                  comfort: settings.comfort, transition: settings.transition)
+            let maximum = values.values.max() ?? 0
+            guard applyCoverage(maximum, direction: .from(offset), displays: values) else { return }
+            status = displayCalibrationIDs.isEmpty ? "Center each display to use display tracking" : "Protecting displays you turn away from"
+            return
+        }
         let value = response.coverage(angle: offset.angle)
         if !response.dismissedUntilCentered { dismissedForLoss = false }
         guard applyCoverage(value, direction: .from(offset)) else { return }
@@ -305,7 +435,7 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
         else { status = "Watching your head motion" }
     }
 
-    @discardableResult private func applyCoverage(_ value: Double, direction: ShieldDirection) -> Bool {
+    @discardableResult private func applyCoverage(_ value: Double, direction: ShieldDirection, displays: [UInt32: Double]? = nil) -> Bool {
         if value > 0.001 {
             guard screenPermission else {
                 clearOverlay()
@@ -319,7 +449,7 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
                 return false
             }
             let radius = previewing ? blur : privacy.ruleMode.settings(comfort: comfort, transition: transition, blur: blur).blur
-            overlay.show(coverage: value, direction: direction, blurRadius: radius)
+            overlay.show(coverage: value, direction: direction, blurRadius: radius, displays: displays)
         } else {
             overlay.fadeOut()
         }
@@ -540,6 +670,7 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
             cancelLearning(message: "Motion was interrupted. Reconnect your AirPods and try again.")
             if connected {
                 motionReferenceGeneration += 1
+                invalidateDisplayCalibration()
                 connected = false
                 center = nil
                 calibrated = false
@@ -562,7 +693,9 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
 
     private func prepareForSleep() {
         motionReferenceGeneration += 1
+        invalidateDisplayCalibration()
         cancelLearning(message: "Calibration stopped while your Mac slept.")
+        nearby.stop()
         privacy.dismissAll()
         motion.stopDeviceMotionUpdates()
         center = nil
@@ -581,6 +714,7 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
         Task { @MainActor [weak self] in
             guard let self, self.enabled else { return }
             self.motionReferenceGeneration += 1
+            self.invalidateDisplayCalibration()
             self.cancelLearning(message: "AirPods disconnected. Reconnect and try again.")
             self.connected = false
             self.calibrated = false
@@ -600,6 +734,7 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
     private func save(_ key: String, _ value: Double) { UserDefaults.standard.set(value, forKey: key) }
 
     func shutdown() {
+        nearby.stop()
         stop()
         privacy.shutdown()
         timer?.invalidate()

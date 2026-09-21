@@ -16,7 +16,7 @@ final class ShieldSurface {
     private let gradient = CAGradientLayer()
     var hasImage: Bool { imageLayer.contents != nil }
 
-    init(screen: NSScreen) {
+    init(screen: NSScreen, includeInCaptures: Bool = false) {
         panel = ShieldPanel(contentRect: screen.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.title = "QuietGlass Blur"
         panel.isFloatingPanel = true
@@ -29,7 +29,7 @@ final class ShieldSurface {
         panel.ignoresMouseEvents = true
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
-        panel.sharingType = .none
+        panel.sharingType = includeInCaptures ? .readOnly : .none
         let view = NSView(frame: NSRect(origin: .zero, size: screen.frame.size))
         view.wantsLayer = true
         view.layer = imageLayer
@@ -90,7 +90,14 @@ final class ShieldOverlay {
     var onClear: (() -> Void)?
     var onCaptureStatus: ((String?) -> Void)?
     var onPermissionDenied: (() -> Void)?
-    private var surfaces: [CGDirectDisplayID: ShieldSurface] = [:]
+    var includeInCaptures = false {
+        didSet {
+            for surface in surfaces.values {
+                surface.panel.sharingType = includeInCaptures ? .readOnly : .none
+            }
+        }
+    }
+    private(set) var surfaces: [CGDirectDisplayID: ShieldSurface] = [:]
     private var captures: [CGDirectDisplayID: DisplayCapture] = [:]
     private var captureTask: Task<Void, Never>?
     private var pendingFade: Task<Void, Never>?
@@ -101,16 +108,20 @@ final class ShieldOverlay {
     private var displayedCoverage = 0.0
     private var targetCoverage = 0.0
     private var transition = GlassTransition()
+    private var displayTargets: [CGDirectDisplayID: Double]?
+    private var displayTransitions: [CGDirectDisplayID: GlassTransition] = [:]
+    private var displayValues: [CGDirectDisplayID: Double] = [:]
     private var lastFrameTime = 0.0
     private var direction: ShieldDirection = .left
     private var blurRadius = 28.0
     private let logger = Logger(subsystem: "local.clinton.QuietGlass", category: "Blur")
     var isCapturing: Bool { !captures.isEmpty }
 
-    func show(coverage: Double, direction: ShieldDirection, blurRadius: Double) {
+    func show(coverage: Double, direction: ShieldDirection, blurRadius: Double, displays: [CGDirectDisplayID: Double]? = nil) {
         guard coverage > 0.001 else { fadeOut(); return }
         pendingFade?.cancel(); pendingFade = nil
         if surfaces.isEmpty { reconcileScreens() }
+        displayTargets = displays
         targetCoverage = max(0, min(1, coverage))
         if self.blurRadius != blurRadius {
             self.blurRadius = blurRadius
@@ -138,6 +149,7 @@ final class ShieldOverlay {
             do { try await Task.sleep(nanoseconds: 120_000_000) } catch { return }
             guard let self else { return }
             self.pendingFade = nil
+            self.displayTargets = nil
             self.targetCoverage = 0
             if self.displayedCoverage == 0 { self.clear() }
             else { self.startAnimation() }
@@ -158,10 +170,20 @@ final class ShieldOverlay {
 
     private func animate() {
         let now = ProcessInfo.processInfo.systemUptime
-        displayedCoverage = transition.advance(to: targetCoverage, elapsed: now - lastFrameTime)
+        let elapsed = now - lastFrameTime
+        displayedCoverage = transition.advance(to: targetCoverage, elapsed: elapsed)
         lastFrameTime = now
-        for surface in surfaces.values { surface.update(coverage: displayedCoverage, direction: direction) }
-        if displayedCoverage == targetCoverage {
+        var settled = true
+        for (id, surface) in surfaces {
+            let target = displayTargets?[id] ?? targetCoverage
+            var animation = displayTransitions[id] ?? GlassTransition()
+            let value = animation.advance(to: target, elapsed: elapsed)
+            displayTransitions[id] = animation
+            displayValues[id] = value
+            surface.update(coverage: value, direction: direction)
+            if value != target { settled = false }
+        }
+        if settled, displayedCoverage == targetCoverage {
             animationTimer?.invalidate()
             animationTimer = nil
             if targetCoverage == 0 { clear() }
@@ -181,6 +203,9 @@ final class ShieldOverlay {
         displayedCoverage = 0
         targetCoverage = 0
         transition.reset()
+        displayTargets = nil
+        displayTransitions = [:]
+        displayValues = [:]
         for surface in surfaces.values { surface.clear() }
         if wasActive { onClear?() }
     }
@@ -196,7 +221,7 @@ final class ShieldOverlay {
                     surface.resize(to: screen.frame)
                     captures.removeValue(forKey: id)?.stop()
                 }
-            } else { surfaces[id] = ShieldSurface(screen: screen) }
+            } else { surfaces[id] = ShieldSurface(screen: screen, includeInCaptures: includeInCaptures) }
         }
         for id in Set(surfaces.keys).subtracting(currentDisplays) {
             captures.removeValue(forKey: id)?.stop()
@@ -214,8 +239,8 @@ final class ShieldOverlay {
 
     private func restoreVisibility() {
         guard active else { return }
-        for surface in surfaces.values {
-            surface.update(coverage: displayedCoverage, direction: direction)
+        for (id, surface) in surfaces {
+            surface.update(coverage: displayValues[id] ?? displayedCoverage, direction: direction)
             surface.keepVisible()
         }
     }
@@ -242,6 +267,8 @@ final class ShieldOverlay {
                     let config = SCStreamConfiguration()
                     config.width = max(1, display.width)
                     config.height = max(1, display.height)
+                    config.backgroundColor = DisplayCapture.background
+                    config.shouldBeOpaque = true
                     config.showsCursor = false
                     config.scalesToFit = true
                     config.preservesAspectRatio = true
@@ -255,8 +282,8 @@ final class ShieldOverlay {
                             guard let self, self.active, self.generation == token,
                                   self.captures[id]?.id == sessionID else { return }
                             self.surfaces[id]?.setImage(image)
-                            self.surfaces[id]?.update(coverage: self.displayedCoverage, direction: self.direction)
-                            if self.displayedCoverage != self.targetCoverage { self.startAnimation() }
+                            self.surfaces[id]?.update(coverage: self.displayValues[id] ?? self.displayedCoverage, direction: self.direction)
+                            if self.displayedCoverage != self.targetCoverage || self.displayTargets != nil { self.startAnimation() }
                             self.onCaptureStatus?(nil)
                         }, onFailure: { [weak self] error in
                             guard let self, self.generation == token,

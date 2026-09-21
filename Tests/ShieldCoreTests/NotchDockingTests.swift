@@ -83,4 +83,27 @@ final class NotchDockingTests: XCTestCase {
             XCTAssertEqual(fullScreen.width, desktop.width)
         }
     }
+
+    func testProfilePopupStaysBesideTheVisibleControlsAcrossDockEdges() {
+        for display in [screen, CGRect(x: -1920, y: 130, width: 1920, height: 1080)] {
+            for edge in [NotchEdge.left, .right, .bottom] {
+                let anchor = NotchDocking.anchor(for: edge, in: display, bottom: display.minY)
+                let controls = NotchDocking.frame(anchor: anchor, vertical: edge.isVertical, expanded: true)
+                let popup = NotchDocking.popupFrame(size: CGSize(width: 220, height: 240), controls: controls, edge: edge, in: display)
+                XCTAssertTrue(display.contains(popup))
+                switch edge {
+                case .left: XCTAssertEqual(popup.minX - controls.maxX, 8)
+                case .right: XCTAssertEqual(controls.minX - popup.maxX, 8)
+                default: XCTAssertEqual(popup.minY - controls.maxY, 8)
+                }
+            }
+        }
+    }
+
+    func testFloatingProfilePopupFlipsBelowWhenThereIsNoRoomAbove() {
+        let controls = NotchDocking.frame(anchor: CGPoint(x: 700, y: 850), vertical: false, expanded: true)
+        let popup = NotchDocking.popupFrame(size: CGSize(width: 220, height: 240), controls: controls, edge: .floating, in: screen)
+        XCTAssertTrue(screen.contains(popup))
+        XCTAssertEqual(controls.minY - popup.maxY, 8)
+    }
 }

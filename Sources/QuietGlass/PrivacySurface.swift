@@ -10,7 +10,7 @@ final class PrivacySurface {
     private let windowMask = CAShapeLayer()
     private(set) var hasImage = false
 
-    init(screen: NSScreen) {
+    init(screen: NSScreen, includeInCaptures: Bool = false) {
         panel = ShieldPanel(contentRect: screen.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.title = "QuietGlass Privacy"
         panel.isFloatingPanel = true
@@ -23,7 +23,7 @@ final class PrivacySurface {
         panel.ignoresMouseEvents = true
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
-        panel.sharingType = .none
+        panel.sharingType = includeInCaptures ? .readOnly : .none
         let view = NSView(frame: NSRect(origin: .zero, size: screen.frame.size))
         view.wantsLayer = true
         view.layer = root
@@ -35,10 +35,9 @@ final class PrivacySurface {
     }
 
     func resize(to frame: CGRect) {
-        guard panel.frame != frame || root.frame.size != frame.size else { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        panel.setFrame(frame, display: true)
+        if panel.frame != frame { panel.setFrame(frame, display: true) }
         root.frame = CGRect(origin: .zero, size: frame.size)
         for layer in [image, windowMask] { layer.frame = root.bounds }
         CATransaction.commit()

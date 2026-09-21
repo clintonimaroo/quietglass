@@ -37,3 +37,18 @@ final class SensitiveTextTests: XCTestCase {
         XCTAssertEqual(String(text[range]), "sample@example.test")
     }
 }
+
+extension SensitiveTextTests {
+    func testCustomPhrasesAreLiteralCaseInsensitiveAndFindRepeatedMatches() {
+        let text = "Café [private]. CAFÉ [private]. Other data."
+        let matches = SensitiveText.ranges(in: text, options: [], phrases: ["cafe [private]"])
+        XCTAssertEqual(matches.count, 2)
+        XCTAssertEqual(matches.map { (text as NSString).substring(with: $0) }, ["Café [private]", "CAFÉ [private]"])
+    }
+
+    func testCustomPhrasesRejectEmptyAndDuplicateValues() {
+        XCTAssertEqual(SensitiveText.cleanPhrases([" ", "  Private ", "PRIVATE", "café", "CAFE"]), ["Private", "café"])
+        XCTAssertEqual(SensitiveText.cleanPhrases((0...70).map { "Phrase \($0)" }).count, 50)
+        XCTAssertEqual(SensitiveText.cleanPhrases([String(repeating: "a", count: 250)]).first?.count, 200)
+    }
+}
