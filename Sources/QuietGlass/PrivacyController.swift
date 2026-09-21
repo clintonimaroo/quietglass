@@ -310,8 +310,9 @@ final class PrivacyController: NSObject, ObservableObject, SCContentSharingPicke
         captureUnavailable = false
         captureAllowed = false
         guard wantsProtection else { onActivityChanged?(); return }
-        guard requestEscape?() == true else { paused = true; instant = false; nearbyCovered = false; notice = "Escape is unavailable. Protection is paused."; onActivityChanged?(); return }
+        guard requestEscape?() == true else { paused = true; instant = false; nearbyCovered = false; captureUnavailable = true; notice = "Escape is unavailable. Protection is paused."; onActivityChanged?(); return }
         guard CGPreflightScreenCaptureAccess() else {
+            captureUnavailable = true
             paused = true
             instant = false
             nearbyCovered = false

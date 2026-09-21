@@ -47,6 +47,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         model.onOpenPrivacySettings = { [weak self] in self?.showPrivacySettings() }
         model.onOpenProfileSettings = { [weak self] in self?.notch.closeControls(); self?.privacySettings.showProfiles() }
+        model.onOpenNearbySettings = { [weak self] in self?.notch.closeControls(); self?.privacySettings.showNearbyPeople() }
         model.onOpenControls = { [weak self] in
             self?.privacySettings.hideForAreaSelection()
             self?.notch.showControls()

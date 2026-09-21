@@ -10,6 +10,11 @@ public struct NearbyPresence {
 
     public init() {}
 
+    public mutating func interrupt() {
+        candidate = nil
+        lastSample = nil
+    }
+
     @discardableResult public mutating func observe(faceCount: Int, at time: TimeInterval) -> Bool {
         guard time.isFinite, faceCount >= 0 else { return covered }
         if let lastSample, time <= lastSample { return covered }

@@ -57,6 +57,7 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
     var onOpenPrivacySettings: (() -> Void)?
     var onOpenControls: (() -> Void)?
     var onOpenProfileSettings: (() -> Void)?
+    var onOpenNearbySettings: (() -> Void)?
     var onShowProfiles: ((NSView, Bool) -> Void)?
     var onRequestHeadSetup: (() -> Void)?
     var onCancelHeadSetup: (() -> Void)?
@@ -108,8 +109,9 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
         super.init()
         nearby.onCoverage = { [weak self] value in self?.privacy.setNearbyCovered(value) }
         nearby.onMonitoring = { [weak self] value in self?.privacy.setNearbyMonitoring(value) }
-        nearbyObservation = nearby.$message.receive(on: RunLoop.main).sink { [weak self] _ in
+        nearbyObservation = nearby.objectWillChange.receive(on: RunLoop.main).sink { [weak self] _ in
             self?.objectWillChange.send()
+            self?.refreshEscape()
             self?.updateShield()
         }
         privacy.blurRadius = blur
@@ -245,7 +247,16 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
     }
 
     var notchClearsProtection: Bool {
-        previewing || privacy.fullScreen || privacy.focusEnabled || nearby.enabled
+        previewing || privacy.fullScreen || privacy.focusEnabled || nearby.enabled || nearby.requesting
+    }
+
+    var nearbyBlurUnavailable: Bool { nearby.enabled && nearby.response == .blur && privacy.captureUnavailable }
+    var nearbyNeedsAttention: Bool { nearby.needsAttention || nearbyBlurUnavailable }
+    var nearbyNoticeTitle: String { nearbyBlurUnavailable ? "Privacy blur unavailable" : nearby.noticeTitle }
+    var nearbyNoticeDetail: String {
+        if nearbyBlurUnavailable { return "Open Settings to restore it" }
+        if nearby.covered && !privacy.ready { return "Preparing blur · Esc to clear" }
+        return nearby.noticeDetail
     }
 
     func applyProfile(_ profile: PrivacyProfile) {
@@ -262,8 +273,26 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
     }
 
     func setNearbyPeople(_ value: Bool) {
-        if value, !screenPermission { requestScreenPermission(); return }
+        if value, nearby.response == .blur, !screenPermission { requestScreenPermission(); return }
+        if value, !shortcuts.armEscape(true) { privacyShortcutError = "Escape is unavailable. Nearby people could not start."; return }
         nearby.setEnabled(value)
+    }
+
+    func setNearbyResponse(_ value: NearbyResponse) {
+        if value == .blur, nearby.enabled || nearby.requesting, !screenPermission { requestScreenPermission(); return }
+        nearby.setResponse(value)
+    }
+
+    func retryNearbyPeople() {
+        if nearby.response == .blur, !screenPermission { requestScreenPermission(); return }
+        guard shortcuts.armEscape(true) else { privacyShortcutError = "Escape is unavailable. Nearby people could not start."; return }
+        nearby.retry()
+    }
+
+    func retryNearbyBlur() {
+        guard screenPermission else { requestScreenPermission(); return }
+        privacy.start()
+        if !privacy.captureUnavailable { privacy.setNearbyCovered(nearby.covered) }
     }
 
     func setEnabled(_ value: Bool) {
@@ -464,7 +493,7 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
     }
 
     private func refreshEscape() {
-        shortcuts.armEscape(privacy.wantsProtection || overlay.isCapturing || coverage > 0)
+        shortcuts.armEscape(nearby.enabled || nearby.requesting || privacy.wantsProtection || overlay.isCapturing || coverage > 0)
     }
 
     func toggleInstantShield() {

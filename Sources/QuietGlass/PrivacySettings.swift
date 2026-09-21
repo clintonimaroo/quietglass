@@ -9,6 +9,7 @@ private final class SettingsWindowState: ObservableObject {
     @Published var fullScreen = false
     @Published var presentation = 0
     @Published var profileRequest = 0
+    @Published var nearbyRequest = 0
     @Published var sidebarToggleRequest = 0
 }
 
@@ -62,6 +63,11 @@ final class PrivacySettingsController: NSObject, NSWindowDelegate {
 
     func showProfiles() {
         windowState.profileRequest += 1
+        show()
+    }
+
+    func showNearbyPeople() {
+        windowState.nearbyRequest += 1
         show()
     }
 
@@ -147,6 +153,7 @@ private struct PrivacySettingsView: View {
     var body: some View {
         GeometryReader { geometry in
             ZStack(alignment: .topLeading) {
+            ScrollViewReader { scroll in
             ScrollView {
                 VStack(alignment: .leading, spacing: 42) {
                     pageHeading(page.rawValue)
@@ -159,6 +166,15 @@ private struct PrivacySettingsView: View {
                 .frame(maxWidth: .infinity, alignment: .top)
             }
             .id(page)
+            .onChange(of: windowState.nearbyRequest) { _, _ in
+                if page != .protection { backHistory.append(page); forwardHistory.removeAll() }
+                page = .protection
+                Task { @MainActor in
+                    await Task.yield()
+                    scroll.scrollTo("nearbyPeople", anchor: .top)
+                }
+            }
+            }
             .padding(.leading, sidebarPinned && geometry.size.width >= 1040 ? 275 : 0)
             .animation(navigationAnimation, value: sidebarPinned)
             .transition(.opacity)
@@ -394,7 +410,7 @@ private struct PrivacySettingsView: View {
         case .protection:
             windowProtection
             sensitiveProtection
-            nearbySettings
+            nearbySettings.id("nearbyPeople")
             protectionStatus
         case .appRules:
             appRules
@@ -449,18 +465,42 @@ private struct PrivacySettingsView: View {
 
     @ViewBuilder private var nearbySettings: some View {
         section("Nearby people") {
-            row("Blur when an additional face appears", detail: "Experimental · Uses your camera to look for more than one face.") {
+            row("Detect additional faces", detail: "Uses your camera while you work. AirPods are not required.") {
                 Toggle("Nearby people", isOn: Binding(get: { model.nearby.enabled || model.nearby.requesting }, set: { model.setNearbyPeople($0) }))
                     .labelsHidden()
+            }
+            divider
+            row("When another face appears", detail: model.nearby.response == .warning ? "Shows an amber warning beside the notch. Your screen stays clear." : "Requests blur across every display. Escape clears it and stops the camera.") {
+                Picker("Response", selection: Binding(get: { model.nearby.response }, set: { model.setNearbyResponse($0) })) {
+                    ForEach(NearbyResponse.allCases) { response in Text(response.title).tag(response) }
+                }
+                .labelsHidden()
+                .frame(width: 162)
             }
             if model.nearby.enabled || model.nearby.requesting || model.nearby.message != "Off" {
                 divider
                 row(model.nearby.message) {
-                    if model.nearby.enabled { Circle().fill(SettingsPalette.accent).frame(width: 7, height: 7).accessibilityLabel("Camera monitoring enabled") }
+                    if model.nearby.canRetry {
+                        if model.nearby.needsCameraPermission {
+                            Button("Camera Settings") {
+                                NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera")!)
+                            }
+                        }
+                        Button("Retry") { model.retryNearbyPeople() }
+                    } else if model.nearby.enabled {
+                        Circle().fill(model.nearby.alertActive ? Color.orange : SettingsPalette.accent)
+                            .frame(width: 7, height: 7).accessibilityLabel(model.nearby.message)
+                    }
                 }
             }
             divider
-            note("Only faces inside the camera’s view can be detected. Images stay on your Mac and are never saved. Escape turns this off and clears the blur. Enable it again after reopening QuietGlass.")
+            if model.nearbyBlurUnavailable {
+                row("Privacy blur unavailable", detail: privacy.notice ?? "Screen capture needs attention.") {
+                    Button("Restore blur") { model.retryNearbyBlur() }
+                }
+                divider
+            }
+            note("Experimental · Detects visible faces, not who they belong to or where they are looking. Poor lighting, glasses, and people outside the camera’s view can cause misses. One visible face can clear the blur even if it is someone else. Camera images stay on your Mac and are never saved. Monitoring starts off after launch or sleep.")
         }
     }
 
@@ -507,8 +547,8 @@ private struct PrivacySettingsView: View {
                 Button(privacy.instant ? "Clear blur" : "Blur screen now") { model.toggleInstantShield() }
             }
             divider
-            row("Demo mode", detail: "Include blur in screenshots and recordings of your entire display.") {
-                Toggle("Demo mode", isOn: $model.demoMode).labelsHidden()
+            row("Show blur in recordings", detail: "Include blur in screenshots and recordings of your entire display.") {
+                Toggle("Show blur in recordings", isOn: $model.demoMode).labelsHidden()
                     .help("Allow screen captures to include QuietGlass blur. Record the entire display, not an individual app window.")
             }
             if model.demoMode {

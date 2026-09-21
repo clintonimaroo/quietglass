@@ -1,6 +1,7 @@
 // Clinton Imaro was here 20/09/2026.
 
 import AppKit
+import Combine
 import SwiftUI
 import ShieldCore
 
@@ -27,6 +28,8 @@ final class NotchBarController: NSObject, NSWindowDelegate, NSPopoverDelegate {
     private let state = NotchState()
     private let panel: NotchPanel
     private let hintPanel: HintPanel
+    private let nearbyPanel: HintPanel
+    private var nearbyObservation: AnyCancellable?
     private let contextPanel: NotchPanel
     private let menuState = NotchMenuState()
     private let canvas = NSView()
@@ -59,10 +62,14 @@ final class NotchBarController: NSObject, NSWindowDelegate, NSPopoverDelegate {
         panel = NotchPanel(contentRect: NSRect(x: 0, y: 0, width: 44, height: 12),
                            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         hintPanel = HintPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        nearbyPanel = HintPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         contextPanel = NotchPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         super.init()
         configure(panel, title: "QuietGlass")
         configure(hintPanel, title: "QuietGlass hint")
+        configure(nearbyPanel, title: "Nearby people alert")
+        nearbyPanel.contentView = NSHostingView(rootView: NearbyNoticeView(model: model))
+        panel.addChildWindow(nearbyPanel, ordered: .above)
         configure(contextPanel, title: "QuietGlass menu")
         contextPanel.level = NSWindow.Level(rawValue: panel.level.rawValue + 1)
         contextPanel.hasShadow = true
@@ -131,6 +138,9 @@ final class NotchBarController: NSObject, NSWindowDelegate, NSPopoverDelegate {
             }
         }
         dockPositionTimer?.tolerance = 0.1
+        nearbyObservation = model.objectWillChange.receive(on: RunLoop.main).sink { [weak self] _ in
+            self?.updateNearbyNotice()
+        }
         contextMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown, .keyDown]) { [weak self] event in
             guard let self else { return event }
             if event.type != .keyDown, self.popover.isShown,
@@ -169,6 +179,7 @@ final class NotchBarController: NSObject, NSWindowDelegate, NSPopoverDelegate {
         snoozeTimer?.invalidate(); snoozeTimer = nil
         refreshDockPosition(animated: panel.isVisible)
         panel.orderFrontRegardless()
+        updateNearbyNotice()
     }
 
     func toggleVisibility() {
@@ -181,6 +192,7 @@ final class NotchBarController: NSObject, NSWindowDelegate, NSPopoverDelegate {
         showHint(nil)
         setExpanded(false)
         panel.orderOut(nil)
+        nearbyPanel.orderOut(nil)
     }
 
     private func hover(_ entered: Bool) {
@@ -221,6 +233,7 @@ final class NotchBarController: NSObject, NSWindowDelegate, NSPopoverDelegate {
             self.usesExpandedBounds = false
             self.layoutPanel()
         }
+        updateNearbyNotice()
     }
 
     private func layoutPanel(animated: Bool = false) {
@@ -241,6 +254,19 @@ final class NotchBarController: NSObject, NSWindowDelegate, NSPopoverDelegate {
             panel.setFrame(frame, display: true)
         }
         hostedBar.frame = NSRect(x: anchor.x - frame.minX - 24, y: anchor.y - frame.minY - 126, width: 150, height: 150)
+        updateNearbyNotice()
+    }
+
+    private func updateNearbyNotice() {
+        guard model.nearbyNeedsAttention, panel.isVisible, !state.expanded,
+              !popover.isShown, !contextMenuOpen, profilePicker?.isVisible != true else {
+            nearbyPanel.orderOut(nil)
+            return
+        }
+        let size = NSSize(width: 236, height: 52)
+        let frame = NotchDocking.popupFrame(size: size, controls: panel.frame, edge: state.edge, in: popupBounds())
+        nearbyPanel.setFrame(frame, display: true)
+        nearbyPanel.orderFrontRegardless()
     }
 
     private func setDockEdge(_ edge: NotchEdge) {
@@ -584,7 +610,35 @@ final class NotchBarController: NSObject, NSWindowDelegate, NSPopoverDelegate {
         if let outsideClickMonitor { NSEvent.removeMonitor(outsideClickMonitor) }
         contextPanel.close()
         hintPanel.close()
+        nearbyObservation?.cancel()
+        nearbyPanel.close()
         panel.close()
+    }
+}
+
+struct NearbyNoticeView: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        Button { model.onOpenNearbySettings?() } label: {
+            HStack(spacing: 9) {
+                Image(systemName: model.nearby.canRetry || model.nearbyBlurUnavailable ? "exclamationmark.triangle" : "person.2.fill")
+                    .font(.system(size: 17)).foregroundStyle(.orange)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(model.nearbyNoticeTitle).font(.system(size: 12, weight: .medium))
+                    Text(model.nearbyNoticeDetail).font(.system(size: 11)).foregroundStyle(.white.opacity(0.65))
+                }
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 12)
+            .frame(width: 236, height: 52)
+            .background(Color(white: 0.08), in: RoundedRectangle(cornerRadius: 13))
+            .overlay(RoundedRectangle(cornerRadius: 13).strokeBorder(.orange.opacity(0.45), lineWidth: 0.7))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(model.nearbyNoticeTitle + ". " + model.nearbyNoticeDetail)
+        .accessibilityHint("Open Nearby people settings")
     }
 }
 
@@ -641,7 +695,7 @@ private struct NotchBarView: View {
         return Button { action(item) } label: {
             ZStack {
                 Capsule()
-                    .fill(.black.opacity(primary && !state.expanded ? 0.58 : 1))
+                    .fill(primary && model.nearbyNeedsAttention ? Color.orange : Color.black.opacity(primary && !state.expanded ? 0.58 : 1))
                     .overlay(Capsule().strokeBorder(.white.opacity(primary && !state.expanded ? 0.55 : 0.25), lineWidth: 0.8))
                     .frame(width: primary && !state.expanded ? (vertical ? 8 : 40) : width,
                            height: primary && !state.expanded ? (vertical ? 40 : 8) : height)
@@ -654,7 +708,7 @@ private struct NotchBarView: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(primary && !state.expanded ? "QuietGlass notch" : label(item))
+        .accessibilityLabel(primary && !state.expanded ? (model.nearbyNeedsAttention ? model.nearbyNoticeTitle : "QuietGlass notch") : label(item))
         .accessibilityHint(primary && !state.expanded ? "Hover to reveal controls, or right-click for settings" : "")
         .onHover { hint($0 && state.expanded ? item : nil) }
     }
@@ -662,7 +716,8 @@ private struct NotchBarView: View {
     private func label(_ item: NotchAction) -> String {
         switch item {
         case .tracking:
-            if model.privacy.fullScreen || model.privacy.focusEnabled || model.nearby.enabled { return "Clear privacy shield" }
+            if model.privacy.fullScreen || model.privacy.focusEnabled { return "Clear privacy shield" }
+            if model.nearby.enabled || model.nearby.requesting { return "Stop Nearby people" }
             if model.previewing { return "Clear preview" }
             if model.enabled { return "Pause tracking" }
             if !model.screenPermission { return model.screenAccessAction }
@@ -700,7 +755,8 @@ private struct NotchHintView: View {
     private var label: String {
         switch action {
         case .tracking:
-            if model.privacy.fullScreen || model.privacy.focusEnabled || model.nearby.enabled { return "Clear privacy shield" }
+            if model.privacy.fullScreen || model.privacy.focusEnabled { return "Clear privacy shield" }
+            if model.nearby.enabled || model.nearby.requesting { return "Stop Nearby people" }
             if model.previewing { return "Clear preview" }
             if model.enabled { return "Pause tracking" }
             if !model.screenPermission { return model.screenAccessAction }

@@ -45,7 +45,7 @@ struct BlurStrengthControl: View {
             glassControls
                 .padding(14)
         }
-        .aspectRatio(Self.previewImage.map { $0.size.width / max($0.size.height, 1) } ?? 1.6, contentMode: .fit)
+        .aspectRatio(1.54, contentMode: .fit)
         .frame(maxWidth: .infinity)
         .clipShape(RoundedRectangle(cornerRadius: 18))
         .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(.white.opacity(0.12), lineWidth: 1))
