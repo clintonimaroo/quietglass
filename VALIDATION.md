@@ -242,3 +242,15 @@
 `build.sh` verifies the locally signed bundle before archiving. Signing and archiving happen in a temporary directory because Documents sync can add Finder metadata to unpacked bundles. Use the supplied zip for installation into Applications.
 
 The app starts paused after relaunch. macOS manages Motion & Fitness and Screen Recording approvals; they are not granted automatically.
+
+## Owner recognition and enrollment preview — 2026-09-21, 1.3.0 build 64
+
+- Added optional Recognize me with bundled Apache-2.0 SFace/Core ML embeddings, Vision landmark alignment, same-face enrollment, randomized turn/eye-close prompts, and explicit Save/Delete actions.
+- Enrollment, retrieval for each monitoring session, and deletion require LocalAuthentication. Templates use the encrypted macOS login Keychain with an explicit signed-app ACL; no plaintext or cloud fallback. This local signature lacks the provisioning required for the Data Protection Keychain. Hardware-bound storage is not claimed.
+- Owner mode starts protected and never falls back to face-count clearing after model, template, camera, authentication or freshness failures. Escape remains a deliberate override. Monitoring/unsaved enrollment stop at sleep, display sleep and session resignation.
+- Redesigned setup into a 404-point-wide sheet with concise instructions, expandable privacy details, a primary pink action and a circular progress guide. During enrollment, the actual mirrored camera session is displayed inside the circle using AVCaptureVideoPreviewLayer. It is not a simulated depth scan. The preview is detached after completion, cancellation or failure; images are not saved.
+- `swift test`: **95 tests passed, 0 failures**. New coverage includes actual Core ML inference, RGB/orientation/alignment checks, missing packaged model, matching/replacement sequences, still-pose/out-of-order checks, one-eye closure, absent/multiple faces, denied/cancelled authentication, camera interruption/retry/stall, enrollment cancellation and failed replacement, preview attachment/cleanup, and save/delete in an isolated temporary Keychain.
+- ONNX/Core ML parity passed for four synthetic tensors; cosine agreement exceeds 0.99999. See Resources/Models/conversion.json. This does not measure face-recognition accuracy.
+- `bash build.sh` passed. The compiled model and Apache attribution are packaged with the app. Existing local signing identity is preserved. Deprecation warnings for the legacy macOS Keychain APIs are expected and documented; migration requires provisioned signing.
+- Intro, scanning and ready states were rendered and inspected without camera access. Build 63 was installed and started before the requested dialog redesign. Build 64's installation/live visual inspection was awaiting the user's Mac unlock at this checkpoint.
+- **Pending:** actual owner enrollment/return, prompt-direction calibration, consented two-person replacement, photo/video/virtual-camera/mask attacks, low-light/glasses tests, live Touch ID/password behavior, and CPU/battery measurements. The user deferred the two-person check. No camera frames or biometric templates were collected by the assistant.

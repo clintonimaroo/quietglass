@@ -135,6 +135,8 @@ private struct PrivacySettingsView: View {
     @ObservedObject var privacy: PrivacyController
     @ObservedObject var windowState: SettingsWindowState
     @State private var editingPhrases = false
+    @State private var settingUpOwner = false
+    @State private var deletingOwner = false
     @State private var phraseDraft = ""
     @State private var page: SettingsPage = .general
     @State private var sidebarPinned = false
@@ -236,6 +238,10 @@ private struct PrivacySettingsView: View {
             page = .general
         }
         .sheet(isPresented: $editingPhrases) { phraseEditor }
+        .sheet(isPresented: $settingUpOwner) { OwnerEnrollmentView(owner: model.nearby.owner) }
+        .confirmationDialog("Delete your saved face?", isPresented: $deletingOwner, titleVisibility: .visible) {
+            Button("Delete face data", role: .destructive) { model.nearby.stop(); model.nearby.owner.deleteEnrollment() }
+        } message: { Text("This removes the face template from Keychain and turns off owner recognition.") }
     }
 
     private var sidebarToggle: some View {
@@ -468,6 +474,30 @@ private struct PrivacySettingsView: View {
             row("Detect additional faces", detail: "Uses your camera while you work. AirPods are not required.") {
                 Toggle("Nearby people", isOn: Binding(get: { model.nearby.enabled || model.nearby.requesting }, set: { model.setNearbyPeople($0) }))
                     .labelsHidden()
+                    .disabled(model.nearby.owner.busy || model.nearby.owner.enrolling)
+            }
+            divider
+            row("Recognize me", detail: "Checks your saved face before clearing the response, with a short movement and eye-close check.") {
+                if model.nearby.owner.enrolled || model.nearby.owner.enabled {
+                    Toggle("Recognize me", isOn: Binding(get: { model.nearby.owner.enabled }, set: { value in
+                        model.nearby.stop()
+                        model.nearby.owner.setEnabled(value)
+                    })).labelsHidden().disabled(model.nearby.owner.busy)
+                } else {
+                    Button("Set up my face") { model.nearby.stop(); settingUpOwner = true }
+                        .disabled(model.nearby.owner.busy)
+                }
+            }
+            if model.nearby.owner.enrolled || model.nearby.owner.enabled {
+                divider
+                row("Saved face", detail: "Stored in this Mac’s Keychain. Touch ID or your Mac password is required when monitoring starts.") {
+                    Button("Set up again") { model.nearby.stop(); settingUpOwner = true }
+                    Button("Delete…") { deletingOwner = true }
+                }.disabled(model.nearby.owner.busy)
+            }
+            if let error = model.nearby.owner.error {
+                divider
+                note(error)
             }
             divider
             row("When another face appears", detail: model.nearby.response == .warning ? "Shows an amber warning beside the notch. Your screen stays clear." : "Requests blur across every display. Escape clears it and stops the camera.") {
@@ -500,7 +530,7 @@ private struct PrivacySettingsView: View {
                 }
                 divider
             }
-            note("Experimental · Detects visible faces, not who they belong to or where they are looking. Poor lighting, glasses, and people outside the camera’s view can cause misses. One visible face can clear the blur even if it is someone else. Camera images stay on your Mac and are never saved. Monitoring starts off after launch or sleep.")
+            note("Experimental · Poor light, glasses, and people outside the camera’s view can cause misses. Recognize me checks your face locally; it is not Face ID or a screen lock, and photos or video may fool it. Without it, any steady single face can clear the response. Camera images are never saved. Monitoring starts off after launch or sleep; Escape stops it.")
         }
     }
 

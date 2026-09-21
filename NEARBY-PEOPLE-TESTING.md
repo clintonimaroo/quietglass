@@ -1,10 +1,10 @@
 # Nearby people test plan
 
-Build 61 adds warning and automatic-blur responses. Build 62 changes only the preview image and its presentation. It remains experimental. Face detection cannot identify the owner or establish that someone is reading the screen. A normal display blurs for everyone when automatic blur is active.
+Build 61 added warning and automatic-blur responses. Build 64 includes optional owner recognition and a live enrollment preview; see [its setup and validation plan](OWNER-RECOGNITION.md). Count-only detection still cannot identify the owner. Neither mode establishes that someone is reading the screen. A normal display blurs for everyone when automatic blur is active.
 
 ## Automated checks
 
-All 75 package tests pass. The camera controller uses an injected camera, permission result, and monotonic clock for deterministic tests without camera access or image fixtures.
+The original 75 package tests cover the count-only behavior below. The camera controller uses an injected camera, permission result, and monotonic clock for deterministic tests without camera access or face-image fixtures. Build 63 adds separate owner-recognition, model and Keychain tests; current results are recorded in VALIDATION.md.
 
 | Scenario | Test type | Required outcome | Result |
 | --- | --- | --- | --- |
@@ -39,7 +39,7 @@ The user deferred the two-person check. These remain pending and are not release
 | Low light/backlight | Repeat at room light, dim light, and with a bright window behind | Misses and false alerts; no-face status and retained protection |
 | Glasses/pose | Repeat with glasses, reflections, hats, partial occlusion, and side-facing people | Recognition limits without implying identity or gaze detection |
 | Camera view limits | Position someone outside the camera view while they can still see the screen | Document the blind spot; do not claim protection there |
-| Owner replacement/photo | Owner leaves while another face remains; show a face photograph | Document count-only limitations; do not treat this as owner authentication |
+| Owner replacement/photo | Owner leaves while another face remains; show a face photograph; repeat with Recognize me | Document count-only limitations and owner-mode false accepts; follow the separate spoof plan |
 | Camera contention/loss | Use another camera app, disconnect an external camera, cover lens, then retry | Useful status, recovery, and no unintended release of existing blur |
 | Escape, sleep, relaunch | Trigger the response, then stop or sleep/reopen | Camera releases; monitoring starts off; response choice persists |
 | Battery/CPU | Compare off, Warn me, and automatic blur under the same workload, brightness, camera, and power conditions | CPU time, memory, battery drain and session length; repeat on battery |

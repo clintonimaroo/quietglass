@@ -263,7 +263,7 @@ final class NotchBarController: NSObject, NSWindowDelegate, NSPopoverDelegate {
             nearbyPanel.orderOut(nil)
             return
         }
-        let size = NSSize(width: 236, height: 52)
+        let size = NSSize(width: model.nearby.owner.enabled ? 280 : 236, height: 52)
         let frame = NotchDocking.popupFrame(size: size, controls: panel.frame, edge: state.edge, in: popupBounds())
         nearbyPanel.setFrame(frame, display: true)
         nearbyPanel.orderFrontRegardless()
@@ -632,7 +632,7 @@ struct NearbyNoticeView: View {
             }
             .foregroundStyle(.white)
             .padding(.horizontal, 12)
-            .frame(width: 236, height: 52)
+            .frame(width: model.nearby.owner.enabled ? 280 : 236, height: 52)
             .background(Color(white: 0.08), in: RoundedRectangle(cornerRadius: 13))
             .overlay(RoundedRectangle(cornerRadius: 13).strokeBorder(.orange.opacity(0.45), lineWidth: 0.7))
         }

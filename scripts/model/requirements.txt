@@ -1,0 +1,4 @@
+coremltools==9.0
+onnx==1.19.0
+onnxruntime==1.23.1
+numpy==2.3.5

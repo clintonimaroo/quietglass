@@ -175,6 +175,11 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
         observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.prepareForSleep() }
         })
+        for name in [NSWorkspace.sessionDidResignActiveNotification, NSWorkspace.screensDidSleepNotification] {
+            observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in self?.nearby.stop() }
+            })
+        }
         observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
                 guard let self, self.enabled else { return }
@@ -250,7 +255,7 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
         previewing || privacy.fullScreen || privacy.focusEnabled || nearby.enabled || nearby.requesting
     }
 
-    var nearbyBlurUnavailable: Bool { nearby.enabled && nearby.response == .blur && privacy.captureUnavailable }
+    var nearbyBlurUnavailable: Bool { (nearby.enabled || nearby.requesting || nearby.covered) && nearby.response == .blur && privacy.captureUnavailable }
     var nearbyNeedsAttention: Bool { nearby.needsAttention || nearbyBlurUnavailable }
     var nearbyNoticeTitle: String { nearbyBlurUnavailable ? "Privacy blur unavailable" : nearby.noticeTitle }
     var nearbyNoticeDetail: String {
@@ -273,6 +278,7 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
     }
 
     func setNearbyPeople(_ value: Bool) {
+        if value, nearby.owner.busy || nearby.owner.enrolling { return }
         if value, nearby.response == .blur, !screenPermission { requestScreenPermission(); return }
         if value, !shortcuts.armEscape(true) { privacyShortcutError = "Escape is unavailable. Nearby people could not start."; return }
         nearby.setEnabled(value)
@@ -422,7 +428,7 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
             stopPreview()
             if privacy.captureUnavailable { status = "Privacy capture needs attention" }
             else if !privacy.ready { status = "Preparing privacy blur" }
-            else { status = privacy.nearbyCovered ? "Covered · Additional face detected" : privacy.peeking ? "Peeking at your screen" : "Privacy blur is on" }
+            else { status = privacy.nearbyCovered ? "Covered · \(nearby.noticeTitle)" : privacy.peeking ? "Peeking at your screen" : "Privacy blur is on" }
             return
         }
         guard !previewing else { return }

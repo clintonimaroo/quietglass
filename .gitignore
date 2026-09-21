@@ -1,4 +1,5 @@
 .build/
+.model-venv/
 .DS_Store
 *.xcuserstate
 .swiftpm/
