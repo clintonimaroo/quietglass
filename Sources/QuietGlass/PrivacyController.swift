@@ -376,6 +376,28 @@ final class PrivacyController: NSObject, ObservableObject, SCContentSharingPicke
         }
     }
 
+    static func visibleControlRegions(in items: [[String: Any]], appPID: pid_t, desktopTop: CGFloat) -> [CGRect] {
+        var controls: [CGRect] = []
+        var occluders: [CGRect] = []
+        // CGWindowList is front-to-back. Only the visible parts of our normal
+        // windows are controls; their covered bounds must not exempt other apps.
+        for item in items {
+            guard let owner = (item[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value,
+                  (item[kCGWindowAlpha as String] as? Double ?? 1) > 0,
+                  let bounds = item[kCGWindowBounds as String] as? NSDictionary,
+                  let quartz = CGRect(dictionaryRepresentation: bounds) else { continue }
+            let layer = item[kCGWindowLayer as String] as? Int ?? 0
+            let frame = CGRect(x: quartz.minX, y: desktopTop - quartz.maxY, width: quartz.width, height: quartz.height)
+            if owner == appPID {
+                // Our blur overlays and notch must not hide Settings from this calculation.
+                guard layer == 0 else { continue }
+                controls += ScreenRegions.visible(frame, behind: occluders)
+            }
+            if layer >= 0 { occluders.append(frame) }
+        }
+        return controls
+    }
+
     private func refreshGeometry() {
         guard wantsProtection else { return }
         visibleRegions = []
@@ -385,13 +407,7 @@ final class PrivacyController: NSObject, ObservableObject, SCContentSharingPicke
             return (item[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value != dockPID
         }
         let top = NSScreen.screens.first?.frame.maxY ?? 0
-        controlRegions = items.compactMap { item in
-            guard (item[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == ProcessInfo.processInfo.processIdentifier,
-                  (item[kCGWindowLayer as String] as? Int ?? 0) == 0,
-                  let bounds = item[kCGWindowBounds as String] as? NSDictionary,
-                  let quartz = CGRect(dictionaryRepresentation: bounds) else { return nil }
-            return CGRect(x: quartz.minX, y: top - quartz.maxY, width: quartz.width, height: quartz.height)
-        }
+        controlRegions = Self.visibleControlRegions(in: items, appPID: ProcessInfo.processInfo.processIdentifier, desktopTop: top)
         focusWindow = frontPID.flatMap { Self.frontWindowItem(in: items, for: $0) }.flatMap { item in
             guard
                   let bounds = item[kCGWindowBounds as String] as? NSDictionary,

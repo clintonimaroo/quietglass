@@ -21,16 +21,27 @@ private final class FakeFaceCamera: NearbyCameraSession {
     var coverChanges: [Bool] = []
     var monitorChanges: [Bool] = []
     var nearby: NearbyPeople!
+    let access: () async -> Bool
 
     init(access: @escaping () async -> Bool = { true }) {
+        self.access = access
         preferences = UserDefaults(suiteName: suite)!
-        nearby = NearbyPeople(preferences: preferences, cameraAccess: access, makeCamera: { [unowned self] completion in
+        createNearby()
+    }
+
+    func createNearby() {
+        nearby = NearbyPeople(preferences: UserDefaults(suiteName: suite)!, cameraAccess: access, makeCamera: { [unowned self] completion in
             let camera = FakeFaceCamera(completion)
             cameras.append(camera)
             return camera
         }, clock: { [unowned self] in now }, usesWatchdog: false)
         nearby.onCoverage = { [unowned self] in coverChanges.append($0) }
         nearby.onMonitoring = { [unowned self] in monitorChanges.append($0) }
+    }
+
+    func relaunch() {
+        nearby.shutdown()
+        createNearby()
     }
 
     func start() async {
@@ -52,19 +63,29 @@ private final class FakeFaceCamera: NearbyCameraSession {
 }
 
 final class NearbyPeopleTests: XCTestCase {
+    @MainActor func testEnablingDetectionPersistsTheUserChoice() async {
+        let h = NearbyHarness()
+        defer { h.finish() }
+        await h.start()
+        let reopenedPreferences = UserDefaults(suiteName: h.suite)!
+        XCTAssertTrue(reopenedPreferences.bool(forKey: "nearbyEnabled"))
+    }
+
     @MainActor func testCameraIsOffOnLaunchAndStoppingClearsBothSources() {
         let h = NearbyHarness()
         defer { h.finish() }
         XCTAssertFalse(h.nearby.enabled)
         XCTAssertFalse(h.nearby.requesting)
         XCTAssertFalse(h.nearby.covered)
+        XCTAssertFalse(h.nearby.wantsMonitoring)
+        h.nearby.restore()
         XCTAssertTrue(h.cameras.isEmpty)
         h.nearby.stop()
         XCTAssertEqual(h.coverChanges, [false])
         XCTAssertEqual(h.monitorChanges, [false])
     }
 
-    @MainActor func testWarningNeverWarmsScreenCaptureAndPersistsOnlyTheResponse() async {
+    @MainActor func testWarningNeverWarmsScreenCaptureAndPersistsTheResponse() async {
         let h = NearbyHarness()
         defer { h.finish() }
         h.nearby.setResponse(.warning)
@@ -78,8 +99,141 @@ final class NearbyPeopleTests: XCTestCase {
         XCTAssertTrue(h.monitorChanges.isEmpty)
         let nextLaunch = NearbyPeople(preferences: h.preferences)
         XCTAssertEqual(nextLaunch.response, .warning)
+        XCTAssertTrue(nextLaunch.wantsMonitoring)
         XCTAssertFalse(nextLaunch.enabled)
         XCTAssertEqual(nextLaunch.status, .off)
+    }
+
+    @MainActor func testRelaunchRestoresSavedDetectionAfterCallbacksAreConnected() async {
+        let h = NearbyHarness()
+        defer { h.finish() }
+        h.nearby.setResponse(.warning)
+        await h.start()
+        let original = h.cameras[0]
+        h.relaunch()
+        XCTAssertTrue(original.stopped)
+        XCTAssertTrue(h.nearby.wantsMonitoring)
+        XCTAssertFalse(h.nearby.enabled)
+        XCTAssertEqual(h.cameras.count, 1, "Initialization must not start the camera before callbacks are ready")
+        h.nearby.restore()
+        await h.settle()
+        XCTAssertTrue(h.nearby.enabled)
+        XCTAssertTrue(h.cameras.last!.started)
+        XCTAssertEqual(h.cameras.count, 2)
+        XCTAssertEqual(h.nearby.response, .warning)
+        XCTAssertFalse(h.nearby.covered)
+        h.nearby.restore()
+        await h.settle()
+        XCTAssertEqual(h.cameras.count, 2, "Restoring an active setting must not start another session")
+    }
+
+    @MainActor func testExplicitOffAndEscapeStopStayOffAcrossRelaunch() async {
+        let h = NearbyHarness()
+        defer { h.finish() }
+        for useToggle in [true, false] {
+            await h.start()
+            if useToggle { h.nearby.setEnabled(false) }
+            else { h.nearby.stop() } // AppModel.dismissShield uses this for Escape.
+            let cameraCount = h.cameras.count
+            h.relaunch()
+            h.nearby.restore()
+            await h.settle()
+            XCTAssertFalse(h.nearby.wantsMonitoring)
+            XCTAssertFalse(h.nearby.enabled)
+            XCTAssertFalse(h.preferences.bool(forKey: "nearbyEnabled"))
+            XCTAssertEqual(h.cameras.count, cameraCount)
+        }
+    }
+
+    @MainActor func testSleepAndSessionPausesPreserveSelectionUntilEveryReasonClears() async {
+        let h = NearbyHarness()
+        defer { h.finish() }
+        await h.start()
+        let original = h.cameras[0]
+        h.nearby.suspend(for: .systemSleep)
+        h.nearby.suspend(for: .displaySleep)
+        h.nearby.suspend(for: .inactiveSession)
+        XCTAssertTrue(original.stopped)
+        XCTAssertTrue(h.nearby.wantsMonitoring)
+        XCTAssertTrue(h.preferences.bool(forKey: "nearbyEnabled"))
+        XCTAssertEqual(h.nearby.status, .paused)
+        original.completion(.success(NearbyFaceSample(count: 2, capturedAt: 1)))
+        await h.settle()
+        XCTAssertFalse(h.nearby.covered)
+        h.nearby.resume(after: .systemSleep)
+        h.nearby.resume(after: .displaySleep)
+        await h.settle()
+        XCTAssertFalse(h.nearby.enabled)
+        XCTAssertEqual(h.cameras.count, 1)
+        h.nearby.resume(after: .inactiveSession)
+        await h.settle()
+        XCTAssertTrue(h.nearby.enabled)
+        XCTAssertEqual(h.cameras.count, 2)
+        h.nearby.resume(after: .inactiveSession)
+        await h.settle()
+        XCTAssertEqual(h.cameras.count, 2)
+    }
+
+    @MainActor func testTurningOffWhilePausedPreventsWakeAndLaunchRestart() async {
+        let h = NearbyHarness()
+        defer { h.finish() }
+        await h.start()
+        h.nearby.suspend(for: .displaySleep)
+        h.nearby.setEnabled(false)
+        h.nearby.resume(after: .displaySleep)
+        h.relaunch()
+        h.nearby.restore()
+        await h.settle()
+        XCTAssertEqual(h.cameras.count, 1)
+        XCTAssertFalse(h.nearby.wantsMonitoring)
+        XCTAssertFalse(h.nearby.enabled)
+    }
+
+    @MainActor func testSavedSelectionSurvivesStartupFailureAndRetriesThroughPreparation() async {
+        let h = NearbyHarness()
+        defer { h.finish() }
+        await h.start()
+        h.relaunch()
+        var preparationFailure: NearbyCameraFailure? = .screenPermission
+        h.nearby.prepareMonitoring = { preparationFailure }
+        h.nearby.restore()
+        await h.settle()
+        XCTAssertTrue(h.nearby.wantsMonitoring)
+        XCTAssertTrue(h.nearby.canRetry)
+        XCTAssertEqual(h.nearby.status, .unavailable(.screenPermission))
+        XCTAssertEqual(h.cameras.count, 1)
+        preparationFailure = .escapeUnavailable
+        h.nearby.retry()
+        await h.settle()
+        XCTAssertEqual(h.nearby.status, .unavailable(.escapeUnavailable))
+        XCTAssertEqual(h.cameras.count, 1)
+        preparationFailure = nil
+        h.nearby.retry()
+        await h.settle()
+        XCTAssertTrue(h.nearby.enabled)
+        XCTAssertEqual(h.cameras.count, 2)
+    }
+
+    @MainActor func testSuspendingPendingPermissionIgnoresItsLateResult() async {
+        var continuation: CheckedContinuation<Bool, Never>?
+        var requests = 0
+        let h = NearbyHarness(access: {
+            requests += 1
+            if requests == 1 { return await withCheckedContinuation { continuation = $0 } }
+            return true
+        })
+        defer { h.finish() }
+        await h.start()
+        XCTAssertNotNil(continuation)
+        h.nearby.suspend(for: .systemSleep)
+        continuation?.resume(returning: true)
+        await h.settle()
+        XCTAssertTrue(h.cameras.isEmpty)
+        XCTAssertTrue(h.nearby.wantsMonitoring)
+        h.nearby.resume(after: .systemSleep)
+        await h.settle()
+        XCTAssertEqual(h.cameras.count, 1)
+        XCTAssertTrue(h.nearby.enabled)
     }
 
     @MainActor func testBlurWaitsForStableDetectionAndDoesNotFlickerThroughMissingFaces() async {
@@ -169,6 +323,7 @@ final class NearbyPeopleTests: XCTestCase {
         XCTAssertTrue(h.cameras.isEmpty)
         XCTAssertFalse(h.nearby.enabled)
         XCTAssertTrue(h.nearby.needsCameraPermission)
+        XCTAssertTrue(h.nearby.wantsMonitoring, "A permission failure must not change the user's switch")
         XCTAssertTrue(h.nearby.canRetry)
         XCTAssertTrue(h.monitorChanges.isEmpty)
     }

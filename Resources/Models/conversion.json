@@ -1,0 +1,27 @@
+{
+  "revision": "47534e27c9851bb1128ccc0102f1145e27f23f98",
+  "onnx_sha256": "0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79",
+  "coreml_sha256": "6d5b3c14ee82742a0a1dcce9026e5f861f8b1d7f9a102f0f3d3bb9c607e2e9df",
+  "checks": [
+    {
+      "input": "black",
+      "cosine": 1.0000000619615355,
+      "max_absolute_error": 2.0429491996765137e-05
+    },
+    {
+      "input": "white",
+      "cosine": 1.000000062023513,
+      "max_absolute_error": 2.86102294921875e-06
+    },
+    {
+      "input": "noise",
+      "cosine": 0.9999999421341348,
+      "max_absolute_error": 1.8775463104248047e-06
+    },
+    {
+      "input": "ramp",
+      "cosine": 1.0000000330248466,
+      "max_absolute_error": 2.652406692504883e-06
+    }
+  ]
+}

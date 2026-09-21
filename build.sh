@@ -32,7 +32,10 @@ quietglass_staged_app="$quietglass_stage/QuietGlass.app"
 mkdir -p "$quietglass_staged_app/Contents/MacOS" "$quietglass_staged_app/Contents/Resources"
 cp "$quietglass_bin_dir/QuietGlass" "$quietglass_staged_app/Contents/MacOS/QuietGlass"
 cp Resources/Info.plist "$quietglass_staged_app/Contents/Info.plist"
+cp LICENSE "$quietglass_staged_app/Contents/Resources/LICENSE.txt"
 cp Resources/Icons/LICENSE.md "$quietglass_staged_app/Contents/Resources/ThirdPartyNotices.txt"
+cat Resources/Models/SFace-LICENSE.txt >> "$quietglass_staged_app/Contents/Resources/ThirdPartyNotices.txt"
+xcrun coremlcompiler compile Sources/QuietGlass/Resources/SFace.mlmodel "$quietglass_staged_app/Contents/Resources"
 cp Resources/Preview/BlurPreview.png "$quietglass_staged_app/Contents/Resources/BlurPreview.png"
 xcrun actool Resources/AppIcon/QuietGlass.icon \
     --compile "$quietglass_staged_app/Contents/Resources" \

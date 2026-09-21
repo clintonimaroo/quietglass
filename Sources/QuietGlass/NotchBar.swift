@@ -263,7 +263,7 @@ final class NotchBarController: NSObject, NSWindowDelegate, NSPopoverDelegate {
             nearbyPanel.orderOut(nil)
             return
         }
-        let size = NSSize(width: 236, height: 52)
+        let size = NSSize(width: model.nearby.owner.enabled ? 280 : 236, height: 52)
         let frame = NotchDocking.popupFrame(size: size, controls: panel.frame, edge: state.edge, in: popupBounds())
         nearbyPanel.setFrame(frame, display: true)
         nearbyPanel.orderFrontRegardless()
@@ -632,7 +632,7 @@ struct NearbyNoticeView: View {
             }
             .foregroundStyle(.white)
             .padding(.horizontal, 12)
-            .frame(width: 236, height: 52)
+            .frame(width: model.nearby.owner.enabled ? 280 : 236, height: 52)
             .background(Color(white: 0.08), in: RoundedRectangle(cornerRadius: 13))
             .overlay(RoundedRectangle(cornerRadius: 13).strokeBorder(.orange.opacity(0.45), lineWidth: 0.7))
         }
@@ -717,7 +717,7 @@ private struct NotchBarView: View {
         switch item {
         case .tracking:
             if model.privacy.fullScreen || model.privacy.focusEnabled { return "Clear privacy shield" }
-            if model.nearby.enabled || model.nearby.requesting { return "Stop Nearby people" }
+            if model.nearby.wantsMonitoring { return "Stop Nearby people" }
             if model.previewing { return "Clear preview" }
             if model.enabled { return "Pause tracking" }
             if !model.screenPermission { return model.screenAccessAction }
@@ -756,7 +756,7 @@ private struct NotchHintView: View {
         switch action {
         case .tracking:
             if model.privacy.fullScreen || model.privacy.focusEnabled { return "Clear privacy shield" }
-            if model.nearby.enabled || model.nearby.requesting { return "Stop Nearby people" }
+            if model.nearby.wantsMonitoring { return "Stop Nearby people" }
             if model.previewing { return "Clear preview" }
             if model.enabled { return "Pause tracking" }
             if !model.screenPermission { return model.screenAccessAction }

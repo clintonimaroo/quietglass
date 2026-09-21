@@ -119,6 +119,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             UserDefaults.standard.removeObject(forKey: "showControlsAfterRelaunch")
             notch.showControls()
         }
+        model.nearby.restore()
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) { buildMenu(menu) }

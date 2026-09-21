@@ -8,8 +8,8 @@ let package = Package(
     products: [.executable(name: "QuietGlass", targets: ["QuietGlass"])],
     targets: [
         .target(name: "ShieldCore"),
-        .executableTarget(name: "QuietGlass", dependencies: ["ShieldCore"]),
+        .executableTarget(name: "QuietGlass", dependencies: ["ShieldCore"], resources: [.copy("Resources/SFace.mlmodel")]),
         .testTarget(name: "ShieldCoreTests", dependencies: ["ShieldCore"]),
-        .testTarget(name: "QuietGlassTests", dependencies: ["QuietGlass"])
+        .testTarget(name: "QuietGlassTests", dependencies: ["QuietGlass"], resources: [.copy("Fixtures")])
     ]
 )
