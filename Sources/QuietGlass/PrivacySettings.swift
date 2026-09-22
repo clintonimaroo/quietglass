@@ -12,6 +12,7 @@ private final class SettingsWindowState: ObservableObject {
     @Published var nearbyRequest = 0
     @Published var maintenanceRequest = 0
     @Published var sidebarToggleRequest = 0
+    @Published var bottomInset: CGFloat = 0
 }
 
 @MainActor
@@ -20,6 +21,8 @@ final class PrivacySettingsController: NSObject, NSWindowDelegate {
     private var observation: AnyCancellable?
     private var needsInitialFrame = true
     private let windowState = SettingsWindowState()
+    private var layoutTimer: Timer?
+    var isVisible: Bool { window.isVisible }
 
     init(model: AppModel) {
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1112, height: 828),
@@ -28,6 +31,7 @@ final class PrivacySettingsController: NSObject, NSWindowDelegate {
         window.title = "QuietGlass Settings"
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
+        window.titlebarSeparatorStyle = .none
         window.backgroundColor = NSColor(srgbRed: 24 / 255, green: 24 / 255, blue: 24 / 255, alpha: 1)
         window.appearance = NSAppearance(named: .darkAqua)
         window.isReleasedWhenClosed = false
@@ -39,6 +43,12 @@ final class PrivacySettingsController: NSObject, NSWindowDelegate {
         window.delegate = self
         window.center()
         positionWindowControls()
+        let timer = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.updateContentInsets() }
+        }
+        timer.tolerance = 0.05
+        layoutTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
         observation = model.privacy.$instant.sink { [weak self] active in
             if active { self?.window.orderOut(nil); NSApp.setActivationPolicy(.accessory) }
         }
@@ -76,8 +86,23 @@ final class PrivacySettingsController: NSObject, NSWindowDelegate {
     func windowWillClose(_ notification: Notification) { NSApp.setActivationPolicy(.accessory) }
     func windowWillEnterFullScreen(_ notification: Notification) { windowState.fullScreen = true }
     func windowWillExitFullScreen(_ notification: Notification) { windowState.fullScreen = false }
-    func windowDidExitFullScreen(_ notification: Notification) { positionWindowControls() }
-    func windowDidResize(_ notification: Notification) { positionWindowControls() }
+    func windowDidEnterFullScreen(_ notification: Notification) { updateContentInsets() }
+    func windowDidExitFullScreen(_ notification: Notification) { positionWindowControls(); updateContentInsets() }
+    func windowDidResize(_ notification: Notification) { positionWindowControls(); updateContentInsets() }
+    func windowDidMove(_ notification: Notification) { updateContentInsets() }
+    func windowDidChangeScreen(_ notification: Notification) { updateContentInsets() }
+
+    private func updateContentInsets() {
+        guard window.isVisible, let screen = window.screen else { return }
+        if !windowState.fullScreen, window.frame.minY >= screen.visibleFrame.minY {
+            if windowState.bottomInset != 0 { windowState.bottomInset = 0 }
+            return
+        }
+        let bottom = max(0, DockGeometry.visibleTop(on: screen) - window.frame.minY)
+        if abs(windowState.bottomInset - bottom) > 0.5 { windowState.bottomInset = bottom }
+    }
+
+    deinit { layoutTimer?.invalidate() }
 
     private func positionWindowControls() {
         guard !windowState.fullScreen else { return }
@@ -127,7 +152,7 @@ private enum SettingsPage: String, CaseIterable, Identifiable {
         case .general: return "profile home office public focus full screen demo recording shortcut privacy appearance blur strength preview launch login updates"
         case .protection: return "window area saved remember sensitive text phrases keys email card camera nearby people coverage test side preview"
         case .appRules: return "applications rules stronger pause automatic windows"
-        case .headTracking: return "airpods motion setup recenter calibration learning sensitivity monitor external displays screen head position"
+        case .headTracking: return "camera airpods motion setup recenter calibration learning sensitivity monitor external displays screen head position"
         }
     }
 }
@@ -166,7 +191,7 @@ private struct PrivacySettingsView: View {
                 }
                 .frame(maxWidth: 768, alignment: .leading)
                 .padding(.horizontal, 32)
-                .padding(.top, 116)
+                .padding(.top, 70)
                 .padding(.bottom, 48)
                 .frame(maxWidth: .infinity, alignment: .top)
             }
@@ -185,6 +210,8 @@ private struct PrivacySettingsView: View {
                 Task { @MainActor in await Task.yield(); scroll.scrollTo("maintenance", anchor: .top) }
             }
             }
+            .padding(.top, 46)
+            .padding(.bottom, windowState.bottomInset)
             .padding(.leading, sidebarPinned && geometry.size.width >= 1040 ? 275 : 0)
             .animation(navigationAnimation, value: sidebarPinned)
             .transition(.opacity)
@@ -246,7 +273,11 @@ private struct PrivacySettingsView: View {
             page = .general
         }
         .sheet(isPresented: $editingPhrases) { phraseEditor }
-        .sheet(isPresented: $settingUpOwner) { OwnerEnrollmentView(owner: model.nearby.owner) }
+        .sheet(isPresented: $settingUpOwner) {
+            OwnerEnrollmentView(owner: model.nearby.owner)
+                .onAppear { model.pauseCamera(for: .ownerEnrollment) }
+                .onDisappear { model.resumeCamera(after: .ownerEnrollment) }
+        }
         .sheet(isPresented: $testingProtection) {
             ProtectionCheckView(check: model.protectionCheck, cameraID: model.nearby.selectedCameraID,
                                 response: model.nearby.response, canBlur: model.screenPermission)
@@ -432,7 +463,7 @@ private struct PrivacySettingsView: View {
             appRules
         case .headTracking:
             calibration
-            displaySettings
+            if model.trackingSource == .airPods { displaySettings }
         }
     }
 
@@ -504,7 +535,7 @@ private struct PrivacySettingsView: View {
         section("Nearby people") {
             row("Camera", detail: "Choose the camera with the best view of you and the people beside you.") {
                 CameraChoicePicker(cameras: model.nearby.cameras, selection: model.nearby.selectedCameraID,
-                                   select: model.nearby.selectCamera, refresh: model.nearby.refreshCameras)
+                                   select: model.selectTrackingCamera, refresh: model.nearby.refreshCameras)
                 .disabled(model.nearby.owner.busy || model.nearby.owner.enrolling)
             }
             divider
@@ -517,6 +548,13 @@ private struct PrivacySettingsView: View {
                 Toggle("Nearby people", isOn: Binding(get: { model.nearby.wantsMonitoring }, set: { model.setNearbyPeople($0) }))
                     .labelsHidden()
                     .disabled(model.nearby.owner.busy || model.nearby.owner.enrolling)
+            }
+            divider
+            row("Detection", detail: "Facing screen waits for a sustained head direction. Any extra face keeps the more cautious count-based response.") {
+                TrackingChoicePicker(label: "Nearby detection", options: NearbyDetection.allCases.map { ($0.rawValue, $0.title) },
+                                     selection: model.nearby.detection.rawValue) {
+                    if let detection = NearbyDetection(rawValue: $0) { model.nearby.setDetection(detection) }
+                }
             }
             divider
             row("Recognize me", detail: "Checks your saved face with a small head turn and a look back at the camera before clearing the response.") {
@@ -608,7 +646,7 @@ private struct PrivacySettingsView: View {
                 }
                 divider
             }
-            note("Detection works within your camera’s view. Poor light, glasses, or an obstructed face can cause misses. Recognize me checks your saved face before clearing the response; without it, any steady single face can clear it. Recognition can be fooled by photos or video and does not replace locking your Mac. Camera images are never saved. Your detection setting is remembered, monitoring pauses while your Mac is inactive, and Escape turns it off.", finePrint: true)
+            note("Detection works within your camera’s view. Facing screen estimates head direction, not eye gaze; unreadable faces can still trigger protection. Poor light, glasses, or an obstructed face can cause misses. Recognize me checks your saved face before clearing the response; without it, any steady single face can clear it. Recognition can be fooled by photos or video and does not replace locking your Mac. Camera images are never saved. Your detection setting is remembered, monitoring pauses while your Mac is inactive, and Escape turns it off.", finePrint: true)
         }
     }
 
@@ -876,6 +914,58 @@ private struct PrivacySettingsView: View {
     }
 
     @ViewBuilder private var calibration: some View {
+        section("Tracking source") {
+            row("Track with", detail: "Choose how QuietGlass detects when you turn away.") {
+                TrackingChoicePicker(label: "Head tracking source", options: HeadTrackingSource.allCases.map { ($0.rawValue, $0.title) },
+                                     selection: model.trackingSource.rawValue) {
+                    if let source = HeadTrackingSource(rawValue: $0) { model.setTrackingSource(source) }
+                }
+            }
+        }
+        if model.trackingSource == .camera { cameraCalibration } else { airPodsCalibration }
+    }
+
+    @ViewBuilder private var cameraCalibration: some View {
+        section("Camera head tracking") {
+            row("Camera", detail: "Choose the camera facing you while you work.") {
+                CameraChoicePicker(cameras: model.nearby.cameras, selection: model.nearby.selectedCameraID,
+                                   select: model.selectTrackingCamera, refresh: model.nearby.refreshCameras)
+                    .disabled(model.nearby.owner.busy || model.nearby.owner.enrolling)
+            }
+            divider
+            row(model.enabled ? "Head tracking is on" : "Start head tracking",
+                detail: model.enabled ? model.status : "Look at your screen and hold still to set your normal position.") {
+                Button(model.enabled ? "Pause" : "Start tracking") { model.setEnabled(!model.enabled) }
+            }
+            if model.enabled {
+                divider
+                if model.cameraTracking.failure != nil {
+                    row("Camera needs attention", detail: model.cameraTracking.message) {
+                        Button("Try again") { model.retryCameraTracking() }
+                    }
+                } else if model.cameraTracking.policy.calibrating {
+                    ProgressView(value: model.cameraTracking.policy.progress)
+                        .accessibilityLabel("Camera calibration progress").padding(16)
+                } else {
+                    row("Your position", detail: "Recalibrate if you move your camera or change where you sit.") {
+                        Button("Recalibrate") { model.recenter() }
+                    }
+                }
+            }
+            divider
+            note("Uses head direction, not eye gaze or Apple Face ID. Brief glances are ignored. Tracking loss keeps a calibrated screen protected. Frames stay on your Mac and are never saved.", finePrint: true)
+        }
+        section("Sensitivity") {
+            row("Start blurring after", detail: "Smaller angles respond to smaller turns.") {
+                Slider(value: $model.comfort, in: 2...30, step: 1).frame(width: 140)
+                    .accessibilityLabel("Camera turn threshold")
+                Text("\(Int(model.comfort))°").monospacedDigit().frame(width: 30)
+            }
+            note("Use Recognize me in Nearby people if returning to view should also require owner verification.", finePrint: true)
+        }
+    }
+
+    @ViewBuilder private var airPodsCalibration: some View {
         section("AirPods") {
             row(model.enabled ? "Head tracking is on" : "Start head tracking",
                 detail: "Connect your AirPods, then face the screen to get ready.") {

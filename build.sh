@@ -52,6 +52,7 @@ cat Resources/Models/SFace-LICENSE.txt >> "$quietglass_staged_app/Contents/Resou
 cat Resources/Sounds/NOTICE.txt >> "$quietglass_staged_app/Contents/Resources/ThirdPartyNotices.txt"
 xcrun coremlcompiler compile Sources/QuietGlass/Resources/SFace.mlmodel "$quietglass_staged_app/Contents/Resources"
 cp Resources/Preview/BlurPreview.png "$quietglass_staged_app/Contents/Resources/BlurPreview.png"
+cp Resources/Preview/BlurPreview.mp4 "$quietglass_staged_app/Contents/Resources/BlurPreview.mp4"
 cp Resources/Help.html "$quietglass_staged_app/Contents/Resources/QuietGlass Help.html"
 cp Sources/QuietGlass/Resources/NearbyAlert.mp3 "$quietglass_staged_app/Contents/Resources/NearbyAlert.mp3"
 xcrun actool Resources/AppIcon/QuietGlass.icon \

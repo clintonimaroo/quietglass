@@ -59,6 +59,24 @@ final class ShieldResponseTests: XCTestCase {
         XCTAssertEqual(sixty.value, oneTwenty.value, accuracy: 0.00001)
     }
 
+    func testCameraCadenceAndMidTurnReversalsStaySmoothAcrossRefreshRates() {
+        var sixty = GlassTransition()
+        var oneTwenty = GlassTransition()
+        // Camera targets arrive at 10 Hz, independently of display refresh.
+        for target in [0.25, 0.6, 1, 0.6, 0.3, 0.5, 0.1] {
+            for _ in 0..<6 {
+                let previous = sixty.value
+                _ = sixty.advance(to: target, elapsed: 1.0 / 60)
+                XCTAssertLessThan(abs(sixty.value - previous), 0.1, "A changing target must not snap the coverage")
+                XCTAssertTrue((0...1).contains(sixty.value))
+            }
+            for _ in 0..<12 { _ = oneTwenty.advance(to: target, elapsed: 1.0 / 120) }
+            XCTAssertEqual(sixty.value, oneTwenty.value, accuracy: 0.00001)
+        }
+        for _ in 0..<60 { _ = sixty.advance(to: 0, elapsed: 1.0 / 60) }
+        XCTAssertEqual(sixty.value, 0, "Clearing must finish rather than leave a faint veil")
+    }
+
     func testGlassReturnsSmoothlyAndEscapeCanResetImmediately() {
         var motion = GlassTransition()
         for _ in 0..<60 { _ = motion.advance(to: 1, elapsed: 1.0 / 60) }

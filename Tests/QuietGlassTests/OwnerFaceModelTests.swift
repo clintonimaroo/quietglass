@@ -31,6 +31,8 @@ final class OwnerFaceModelTests: XCTestCase {
             XCTAssertEqual(faces.count, 1)
             let face = try XCTUnwrap(faces.first)
             XCTAssertNotNil(face.landmarks)
+            XCTAssertNotNil(face.pitch, "Camera head tracking needs a measured pitch")
+            XCTAssertTrue(face.pitch?.doubleValue.isFinite == true)
             XCTAssertEqual(try XCTUnwrap(face.yaw).doubleValue, try XCTUnwrap(detected.yaw).doubleValue, accuracy: 0.00001)
             if name == "center" { XCTAssertLessThan(abs(face.yaw!.doubleValue), 0.14) }
             if name == "left" { XCTAssertGreaterThan(face.yaw!.doubleValue, 0.22) }
@@ -133,5 +135,27 @@ final class OwnerFaceModelTests: XCTestCase {
         XCTAssertEqual(input[[2, 10, 50] as [NSNumber]].floatValue, 0, accuracy: 1)
         XCTAssertEqual(input[[0, 100, 50] as [NSNumber]].floatValue, 0, accuracy: 1)
         XCTAssertEqual(input[[2, 100, 50] as [NSNumber]].floatValue, 255, accuracy: 1)
+    }
+}
+
+extension OwnerFaceModelTests {
+    func testMultipleFacesHaveLandmarksAndIndividualPoses() throws {
+        let original = try fixtureBuffer("center")
+        let source = CIImage(cvPixelBuffer: original)
+        let width = CVPixelBufferGetWidth(original), height = CVPixelBufferGetHeight(original)
+        var composite: CVPixelBuffer?
+        XCTAssertEqual(CVPixelBufferCreate(nil, width * 2, height, kCVPixelFormatType_32BGRA,
+            [kCVPixelBufferIOSurfacePropertiesKey: [:]] as CFDictionary, &composite), kCVReturnSuccess)
+        let buffer = try XCTUnwrap(composite)
+        let pair = source.transformed(by: CGAffineTransform(translationX: CGFloat(width), y: 0)).composited(over: source)
+        CIContext().render(pair, to: buffer)
+        let faces = try OwnerFaceDetector.observations(in: buffer)
+        XCTAssertEqual(faces.count, 2)
+        let model = try OwnerFaceModel()
+        for face in faces {
+            XCTAssertNotNil(face.landmarks)
+            XCTAssertNotNil(face.pitch)
+            XCTAssertNotNil(try model.features(buffer: buffer, face: face))
+        }
     }
 }

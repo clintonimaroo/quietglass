@@ -17,6 +17,21 @@ public enum NotchDocking {
         point.y <= highestAnchor(in: screen)
     }
 
+    public static func visibleDockTop(in screen: CGRect, visibleFrame: CGRect, dockFrames: [CGRect]) -> CGFloat {
+        var top = screen.minY
+        for frame in dockFrames {
+            let overlap = frame.intersection(screen)
+            guard !overlap.isNull, overlap.height > 4, overlap.width > overlap.height,
+                  // Dock also owns transparent full-display windows during
+                  // Spaces/full-screen transitions. They are not a Dock inset.
+                  overlap.height < screen.height / 2,
+                  overlap.minY <= screen.minY + 2 else { continue }
+            top = max(top, overlap.maxY)
+        }
+        guard top > screen.minY else { return screen.minY }
+        return visibleFrame.minY > screen.minY + 4 ? visibleFrame.minY : top
+    }
+
     public static func popupBounds(in visibleFrame: CGRect, bottom: CGFloat) -> CGRect {
         CGRect(x: visibleFrame.minX, y: bottom, width: visibleFrame.width,
                height: max(0, visibleFrame.maxY - bottom))

@@ -422,7 +422,8 @@ final class PrivacyController: NSObject, ObservableObject, SCContentSharingPicke
         }
     }
 
-    static func contentWindowItems(in items: [[String: Any]], bundleIdentifiers: [pid_t: String]) -> [[String: Any]] {
+    static func contentWindowItems(in items: [[String: Any]], bundleIdentifiers: [pid_t: String],
+                                   displayFrames: [CGRect] = []) -> [[String: Any]] {
         // Desktop and cursor decorations have transparent pixels even when
         // CGWindowList reports alpha 1. Their rectangular bounds are not opaque
         // content and must not cut holes in controls or protected windows.
@@ -432,10 +433,22 @@ final class PrivacyController: NSObject, ObservableObject, SCContentSharingPicke
             "com.apple.TextInputUI.xpc.CursorUIViewService",
             "com.openai.sky.CUAService"
         ]
+        let desktop = displayFrames.reduce(CGRect.null) { $0.union($1) }
+        let captureCanvases = displayFrames + (displayFrames.count > 1 ? [desktop] : [])
         return items.filter { item in
             guard let pid = (item[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value,
                   let bundle = bundleIdentifiers[pid] else { return true }
-            return !decorations.contains(bundle)
+            if decorations.contains(bundle) { return false }
+            // Screenshot's transparent selection/recording canvas reports
+            // alpha 1 over a whole display (or the combined desktop). Keep
+            // its smaller toolbar and menus as real occluders.
+            guard bundle == "com.apple.screencaptureui",
+                  let bounds = item[kCGWindowBounds as String] as? NSDictionary,
+                  let frame = CGRect(dictionaryRepresentation: bounds) else { return true }
+            return !captureCanvases.contains { canvas in
+                abs(frame.minX - canvas.minX) <= 1 && abs(frame.minY - canvas.minY) <= 1 &&
+                abs(frame.width - canvas.width) <= 1 && abs(frame.height - canvas.height) <= 1
+            }
         }
     }
 
@@ -467,8 +480,13 @@ final class PrivacyController: NSObject, ObservableObject, SCContentSharingPicke
         let bundleIdentifiers = Dictionary(uniqueKeysWithValues: NSWorkspace.shared.runningApplications.compactMap { app in
             app.bundleIdentifier.map { (app.processIdentifier, $0) }
         })
-        let items = Self.contentWindowItems(in: windowList(onScreen: true), bundleIdentifiers: bundleIdentifiers)
         let top = NSScreen.screens.first?.frame.maxY ?? 0
+        let displayFrames = NSScreen.screens.map { screen in
+            CGRect(x: screen.frame.minX, y: top - screen.frame.maxY,
+                   width: screen.frame.width, height: screen.frame.height)
+        }
+        let items = Self.contentWindowItems(in: windowList(onScreen: true), bundleIdentifiers: bundleIdentifiers,
+                                           displayFrames: displayFrames)
         controlRegions = Self.visibleControlRegions(in: items, appPID: ProcessInfo.processInfo.processIdentifier, desktopTop: top)
         focusWindow = frontPID.flatMap { Self.frontWindowItem(in: items, for: $0) }.flatMap { item in
             guard

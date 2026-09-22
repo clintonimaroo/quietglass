@@ -9,6 +9,10 @@ import simd
 
 @MainActor
 final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelegate {
+    @Published private(set) var trackingSource: HeadTrackingSource
+    let cameraTracking = CameraHeadTracking()
+    private var cameraPauses: Set<NearbyPauseReason> = []
+    private var protectCameraOnResume = false
     @Published private(set) var enabled = false
     @Published private(set) var connected = false
     @Published private(set) var calibrated = false
@@ -104,6 +108,7 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
 
     override init() {
         let prefs = UserDefaults.standard
+        trackingSource = HeadTrackingSource(rawValue: prefs.string(forKey: "headTrackingSource") ?? "") ?? .airPods
         demoMode = prefs.bool(forKey: "includeBlurInCaptures")
         comfort = prefs.object(forKey: "comfort") == nil ? 15 : max(2, min(30, prefs.double(forKey: "comfort")))
         transition = prefs.object(forKey: "transition") == nil ? 18 : max(5, min(30, prefs.double(forKey: "transition")))
@@ -112,10 +117,11 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
         keyModifiers = prefs.object(forKey: "shortcutModifiers") == nil ? UInt32(controlKey | optionKey | cmdKey) : UInt32(prefs.integer(forKey: "shortcutModifiers"))
         shortcutLabel = prefs.string(forKey: "shortcutLabel") ?? "⌃⌥⌘C"
         super.init()
+        cameraTracking.onChange = { [weak self] in self?.receiveCameraTracking() }
         nearby.onCoverage = { [weak self] value in self?.privacy.setNearbyCovered(value) }
         nearby.onMonitoring = { [weak self] value in self?.privacy.setNearbyMonitoring(value) }
-        protectionCheck.onBegin = { [weak self] in self?.nearby.suspend(for: .protectionTest) }
-        protectionCheck.onEnd = { [weak self] in self?.nearby.resume(after: .protectionTest) }
+        protectionCheck.onBegin = { [weak self] in self?.nearby.suspend(for: .protectionTest); self?.pauseCamera(for: .protectionTest) }
+        protectionCheck.onEnd = { [weak self] in self?.nearby.resume(after: .protectionTest); self?.resumeCamera(after: .protectionTest) }
         protectionCheck.onDemoCoverage = { [weak self] in self?.privacy.setTestCovered($0) }
         protectionCheck.demoAvailable = { [weak self] in self?.privacy.captureUnavailable == false }
         protectionCheckObservation = protectionCheck.objectWillChange.receive(on: RunLoop.main).sink { [weak self] _ in self?.objectWillChange.send() }
@@ -204,16 +210,17 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
         ]
         for (pause, resume, reason) in nearbyLifecycle {
             observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: pause, object: nil, queue: .main) { [weak self] _ in
-                Task { @MainActor in self?.nearby.suspend(for: reason) }
+                Task { @MainActor in self?.nearby.suspend(for: reason); self?.pauseCamera(for: reason) }
             })
             observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: resume, object: nil, queue: .main) { [weak self] _ in
-                Task { @MainActor in self?.nearby.resume(after: reason) }
+                Task { @MainActor in self?.nearby.resume(after: reason); self?.resumeCamera(after: reason) }
             })
         }
         observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
                 self.nearby.resume(after: .systemSleep)
+                self.resumeCamera(after: .systemSleep)
                 guard self.enabled else { return }
                 self.detail = "Look at your screen and recenter after waking your Mac."
                 self.beginMotionIfAvailable()
@@ -228,7 +235,7 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
     }
 
     var fullCoverAngle: Int { Int(comfort + transition) }
-    var canRecenter: Bool { enabled && connected && latest != nil && ProcessInfo.processInfo.systemUptime - lastSample < 1.5 }
+    var canRecenter: Bool { trackingSource == .camera ? enabled && cameraTracking.failure == nil && cameraPauses.isEmpty : enabled && connected && latest != nil && ProcessInfo.processInfo.systemUptime - lastSample < 1.5 }
     var hasCompletedHeadSetup: Bool { UserDefaults.standard.bool(forKey: "headSetupCompleted.v1") }
     var screenAccessPreviouslyGranted: Bool { UserDefaults.standard.bool(forKey: "screenAccessPreviouslyGranted") }
     var screenAccessAction: String { screenAccessPreviouslyGranted ? "Restore screen access" : "Allow screen access" }
@@ -348,12 +355,65 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
         if !privacy.captureUnavailable { privacy.setNearbyCovered(nearby.covered) }
     }
 
+    func setTrackingSource(_ source: HeadTrackingSource) {
+        guard source != trackingSource else { return }
+        stop()
+        trackingSource = source
+        UserDefaults.standard.set(source.rawValue, forKey: "headTrackingSource")
+        detail = source == .camera ? "Use your camera to blur when you turn away. Start tracking to calibrate." : "Connect your AirPods to this Mac, then start head tracking."
+    }
+
+    func selectTrackingCamera(_ id: String) {
+        let resume = enabled && trackingSource == .camera
+        if resume { protectCameraOnResume = cameraTracking.policy.calibrated || cameraTracking.policy.coverage > 0; cameraTracking.stop() }
+        nearby.selectCamera(id)
+        if resume { startCameraTracking() }
+    }
+
+    func retryCameraTracking() { startCameraTracking() }
+
+    private func startCameraTracking() {
+        guard enabled, trackingSource == .camera, cameraPauses.isEmpty else { return }
+        refreshResponse()
+        cameraTracking.start(deviceID: nearby.selectedCameraID, keepCovered: protectCameraOnResume)
+        protectCameraOnResume = false
+        receiveCameraTracking()
+    }
+
+    private func receiveCameraTracking() {
+        guard enabled, trackingSource == .camera else { return }
+        connected = cameraTracking.policy.hasFace
+        calibrated = cameraTracking.policy.calibrated
+        offset = cameraTracking.policy.offset
+        detail = cameraTracking.message
+        objectWillChange.send()
+        updateShield()
+    }
+
+    func pauseCamera(for reason: NearbyPauseReason) {
+        guard cameraPauses.insert(reason).inserted, enabled, trackingSource == .camera else { return }
+        protectCameraOnResume = protectCameraOnResume || cameraTracking.policy.calibrated || cameraTracking.policy.coverage > 0
+        cameraTracking.stop(); clearOverlay()
+        status = "Camera head tracking paused"
+    }
+
+    func resumeCamera(after reason: NearbyPauseReason) {
+        guard cameraPauses.remove(reason) != nil else { return }
+        startCameraTracking()
+    }
+
     func setEnabled(_ value: Bool) {
         if value { start() } else { stop() }
     }
 
     func start() {
         guard !enabled else { return }
+        if trackingSource == .camera {
+            guard screenPermission else { requestScreenPermission(); return }
+            guard shortcuts.armEscape(true) else { privacyShortcutError = "Escape is unavailable. Camera tracking could not start."; return }
+            enabled = true; dismissedForLoss = false
+            startCameraTracking(); return
+        }
         if !headSetupActive, !hasCompletedHeadSetup, let onRequestHeadSetup {
             onRequestHeadSetup()
             return
@@ -375,6 +435,8 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
         cancelLearning()
         invalidateDisplayCalibration()
         enabled = false
+        protectCameraOnResume = false
+        cameraTracking.stop()
         motion.stopDeviceMotionUpdates()
         motion.stopConnectionStatusUpdates()
         center = nil
@@ -393,7 +455,7 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
     }
 
     private func beginMotionIfAvailable() {
-        guard enabled, !motion.isDeviceMotionActive, motion.isDeviceMotionAvailable else { return }
+        guard trackingSource == .airPods, enabled, !motion.isDeviceMotionActive, motion.isDeviceMotionAvailable else { return }
         motionReferenceGeneration += 1
         invalidateDisplayCalibration()
         motion.startDeviceMotionUpdates(to: .main) { [weak self] sample, error in
@@ -407,6 +469,7 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
     }
 
     private func receive(_ sample: CMDeviceMotion) {
+        guard enabled, trackingSource == .airPods else { return }
         let now = ProcessInfo.processInfo.systemUptime
         let q = sample.attitude.quaternion
         guard q.x.isFinite, q.y.isFinite, q.z.isFinite, q.w.isFinite else { return }
@@ -438,6 +501,10 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
         cancelLearning()
         if !enabled { start() }
         guard enabled else { return }
+        if trackingSource == .camera {
+            if cameraTracking.failure != nil { startCameraTracking() } else { cameraTracking.recenter() }
+            return
+        }
         guard connected, ProcessInfo.processInfo.systemUptime - lastSample < 1.5, let latest else {
             pendingCalibration = true
             detail = "Waiting for motion. Keep your AirPods connected and face the screen."
@@ -460,6 +527,7 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
     func dismissShield(file: StaticString = #fileID, line: UInt = #line) {
         protectionCheck.stopDemonstration()
         nearby.stop(file: file, line: line)
+        if trackingSource == .camera { stop() }
         cancelLearning()
         stopPreview()
         response.dismiss()
@@ -492,6 +560,13 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
         if privacy.ruleMode == .pause {
             clearOverlay()
             status = "Head blur paused for \(privacy.frontAppName)"
+            return
+        }
+        if trackingSource == .camera {
+            guard cameraPauses.isEmpty else { clearOverlay(); return }
+            let value = cameraTracking.policy.coverage
+            guard applyCoverage(value, direction: .from(cameraTracking.policy.offset)) else { return }
+            status = cameraTracking.message
             return
         }
         if !connected || !calibrated {
@@ -547,7 +622,7 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
     }
 
     private func refreshEscape() {
-        shortcuts.armEscape(nearby.wantsMonitoring || privacy.wantsProtection || overlay.isCapturing || coverage > 0)
+        shortcuts.armEscape((enabled && trackingSource == .camera) || nearby.wantsMonitoring || privacy.wantsProtection || overlay.isCapturing || coverage > 0)
     }
 
     func toggleInstantShield() {
@@ -742,6 +817,7 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
     private func heartbeat() {
         refreshScreenPermission()
         guard enabled else { return }
+        if trackingSource == .camera { return }
         let auth = CMHeadphoneMotionManager.authorizationStatus()
         if auth == .denied || auth == .restricted {
             stop()
@@ -779,6 +855,7 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
         invalidateDisplayCalibration()
         cancelLearning(message: "Calibration stopped while your Mac slept.")
         nearby.suspend(for: .systemSleep)
+        pauseCamera(for: .systemSleep)
         privacy.dismissAll()
         motion.stopDeviceMotionUpdates()
         center = nil
@@ -795,7 +872,7 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
 
     nonisolated func headphoneMotionManagerDidDisconnect(_ manager: CMHeadphoneMotionManager) {
         Task { @MainActor [weak self] in
-            guard let self, self.enabled else { return }
+            guard let self, self.enabled, self.trackingSource == .airPods else { return }
             self.motionReferenceGeneration += 1
             self.invalidateDisplayCalibration()
             self.cancelLearning(message: "AirPods disconnected. Reconnect and try again.")
@@ -810,6 +887,8 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
 
     private func refreshResponse() {
         let settings = privacy.ruleMode.settings(comfort: comfort, transition: transition, blur: blur)
+        cameraTracking.comfort = settings.comfort
+        cameraTracking.transition = settings.transition
         response.comfort = settings.comfort
         response.transition = settings.transition
     }

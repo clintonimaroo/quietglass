@@ -137,7 +137,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) { buildMenu(menu) }
 
     func applicationDidResignActive(_ notification: Notification) {
-        if NSApp.activationPolicy() == .regular { NSApp.setActivationPolicy(.accessory) }
+        if NSApp.activationPolicy() == .regular, !privacySettings.isVisible {
+            NSApp.setActivationPolicy(.accessory)
+        }
     }
 
     private func buildMenu(_ menu: NSMenu) {

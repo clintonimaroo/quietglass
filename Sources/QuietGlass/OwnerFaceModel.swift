@@ -15,14 +15,14 @@ enum OwnerFaceDetector {
         detector.revision = VNDetectFaceRectanglesRequestRevision3
         try handler.perform([detector])
         let faces = (detector.results ?? []).filter { $0.confidence >= 0.6 }
-        guard faces.count == 1 else { return faces }
+        guard !faces.isEmpty else { return faces }
         let landmarks = VNDetectFaceLandmarksRequest()
         landmarks.revision = VNDetectFaceLandmarksRequestRevision3
         landmarks.inputFaceObservations = faces
         try handler.perform([landmarks])
         // Preserve the detected count if landmarks are temporarily unavailable;
         // feature extraction will reject that frame without inventing a pose.
-        if let result = landmarks.results, result.count == 1 { return result }
+        if let result = landmarks.results, result.count == faces.count { return result }
         return faces
     }
 }

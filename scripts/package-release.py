@@ -40,7 +40,7 @@ def verify_app(app, version, build):
     if '/Users/' in run('otool', '-L', executable):
         raise RuntimeError('Executable links to a developer-local library')
     for resource in ['SFace.mlmodelc/model.espresso.weights', 'QuietGlass.icns', 'Assets.car',
-                     'BlurPreview.png', 'QuietGlass Help.html', 'NearbyAlert.mp3', 'LICENSE.txt', 'ThirdPartyNotices.txt']:
+                     'BlurPreview.png', 'BlurPreview.mp4', 'QuietGlass Help.html', 'NearbyAlert.mp3', 'LICENSE.txt', 'ThirdPartyNotices.txt']:
         if not (app / 'Contents/Resources' / resource).is_file():
             raise RuntimeError(f'Missing app resource: {resource}')
     if (app / 'Contents/Resources/LICENSE.txt').read_bytes() != (ROOT / 'LICENSE').read_bytes():
@@ -52,6 +52,9 @@ def verify_app(app, version, build):
         raise RuntimeError('Missing warning sound attribution')
     if (app / 'Contents/Resources/NearbyAlert.mp3').read_bytes() != (ROOT / 'Sources/QuietGlass/Resources/NearbyAlert.mp3').read_bytes():
         raise RuntimeError('Bundled warning sound does not match the source')
+    for preview in ['BlurPreview.png', 'BlurPreview.mp4']:
+        if (app / 'Contents/Resources' / preview).read_bytes() != (ROOT / 'Resources/Preview' / preview).read_bytes():
+            raise RuntimeError(f'Bundled preview does not match the source: {preview}')
 
 
 def notarize(path, profile):
@@ -113,13 +116,14 @@ def main():
             '2. Drag QuietGlass.app into Applications.\n'
             '3. Open QuietGlass from Applications, then eject the disk image.\n\n'
             + gatekeeper + '\n'
-            'GET STARTED\nAllow Screen Recording for blur. For AirPods tracking, choose Start\n'
-            'tracking and follow calibration. Nearby people uses Camera permission.\n'
+            'GET STARTED\nAllow Screen Recording for blur. In Settings > Head tracking, choose\n'
+            'Camera or AirPods, start tracking, and calibrate facing your screen.\n'
+            'Camera head tracking and Nearby people use Camera permission.\n'
             'Manual, window, area and Focus protection need no AirPods or camera.\n'
             'The menu bar icon opens Settings and Help; hover over the floating\n'
             'control bar for quick controls. Closing Settings keeps the app running.\n\n'
             'Control-Option-Command-P toggles screen blur. Escape clears protection\n'
-            'and turns camera detection off until enabled again.\n\n'
+            'and stops camera head tracking and Nearby people until enabled again.\n\n'
             'PRIVACY\nScreen, camera and motion processing stay on your Mac. Camera images\n'
             'are not saved or uploaded. Optional recognition saves a face template\n'
             'in the macOS login Keychain; delete it in Settings. Recognition can\n'

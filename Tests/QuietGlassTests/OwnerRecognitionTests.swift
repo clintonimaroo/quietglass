@@ -386,3 +386,48 @@ final class OwnerRecognitionTests: XCTestCase {
         XCTAssertThrowsError(try store.read(context: LAContext()))
     }
 }
+
+extension OwnerRecognitionTests {
+    @MainActor func testOwnerRemainsVerifiedWithSideFacingBackgroundButForwardDwellProtects() async {
+        let h = OwnerRig(); defer { h.finish() }
+        await h.start(); await h.passChallenge()
+        XCTAssertFalse(h.nearby.covered)
+        let ownerBounds = CGRect(x: 0.4, y: 0.3, width: 0.2, height: 0.3)
+        let otherBounds = CGRect(x: 0.75, y: 0.4, width: 0.14, height: 0.2)
+        let owner = CameraIdentity(vector: h.vector, pose: OwnerPose(yaw: 0, eyes: 0.3))
+        let other = CameraIdentity(vector: [0, 1] + Array(repeating: 0, count: 126), pose: OwnerPose(yaw: 1, eyes: 0.3))
+        for i in 0..<30 {
+            h.now += 0.1
+            h.cameras.last!.completion(.success(NearbyFaceSample(count: 2, capturedAt: h.now,
+                bounds: [otherBounds, ownerBounds],
+                faces: [CameraFace(bounds: otherBounds, yaw: 1, pitch: 0), CameraFace(bounds: ownerBounds, yaw: 0, pitch: 0)],
+                identities: [other, owner])))
+            await h.settle()
+            XCTAssertFalse(h.nearby.covered, "Background face should not invalidate owner at frame \(i)")
+        }
+        for _ in 0..<20 {
+            h.now += 0.1
+            h.cameras.last!.completion(.success(NearbyFaceSample(count: 2, capturedAt: h.now,
+                bounds: [ownerBounds, otherBounds],
+                faces: [CameraFace(bounds: ownerBounds, yaw: 0, pitch: 0), CameraFace(bounds: otherBounds, yaw: 0, pitch: 0)],
+                identities: [owner, other])))
+            await h.settle()
+        }
+        XCTAssertTrue(h.nearby.covered)
+        XCTAssertEqual(h.nearby.noticeTitle, "Additional face detected")
+    }
+
+    @MainActor func testBackgroundPoseFilterNeverAllowsAnUnmatchedOwnerToClear() async {
+        let h = OwnerRig(); defer { h.finish() }
+        await h.start()
+        let bounds = CGRect(x: 0.4, y: 0.3, width: 0.2, height: 0.3)
+        for _ in 0..<30 {
+            h.now += 0.1
+            h.cameras.last!.completion(.success(NearbyFaceSample(count: 1, capturedAt: h.now, bounds: [bounds],
+                faces: [CameraFace(bounds: bounds, yaw: 1, pitch: 0)],
+                identities: [CameraIdentity(vector: [0, 1] + Array(repeating: 0, count: 126), pose: OwnerPose(yaw: 0, eyes: 0.3))])))
+            await h.settle()
+        }
+        XCTAssertTrue(h.nearby.covered)
+    }
+}

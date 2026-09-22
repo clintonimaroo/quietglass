@@ -73,9 +73,11 @@ public enum GlassMask {
         let progress = max(0, min(1, coverage))
         if progress == 0 { return 0 }
         if progress == 1 { return 1 }
-        let feather = 0.32
+        let feather = 0.48
         let linear = max(0, min(1, (progress * (1 + feather) - position) / feather))
-        return linear * linear * (3 - 2 * linear)
+        // Zero slope and acceleration at both ends keep the feather from
+        // developing a visible edge as it enters or leaves the display.
+        return linear * linear * linear * (linear * (linear * 6 - 15) + 10)
     }
 }
 
@@ -88,7 +90,7 @@ public struct GlassTransition {
         guard requestedTarget.isFinite, elapsed.isFinite else { return value }
         let target = max(0, min(1, requestedTarget))
         let dt = max(0, min(1.0 / 15, elapsed))
-        let frequency = 16.0
+        let frequency = 14.0
         let displacement = value - target
         let change = velocity + frequency * displacement
         let decay = exp(-frequency * dt)

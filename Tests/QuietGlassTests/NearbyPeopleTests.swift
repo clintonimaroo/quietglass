@@ -2,6 +2,7 @@
 
 import XCTest
 import SwiftUI
+import ShieldCore
 @testable import QuietGlass
 
 private final class FakeFaceCamera: NearbyCameraSession {
@@ -576,5 +577,29 @@ final class NearbyPeopleTests: XCTestCase {
         XCTAssertFalse(privacy.ready)
         XCTAssertFalse(privacy.nearbyCovered)
         XCTAssertEqual(privacy.notice, "Escape is unavailable. Protection is paused.")
+    }
+}
+
+extension NearbyPeopleTests {
+    @MainActor func testFacingScreenFilterAndStrictChoicePersistAcrossRelaunch() async {
+        let h = NearbyHarness(); defer { h.finish() }
+        await h.start()
+        let owner = CGRect(x: 0.4, y: 0.3, width: 0.2, height: 0.3)
+        let other = CGRect(x: 0.75, y: 0.4, width: 0.14, height: 0.2)
+        func send(_ count: Int) async {
+            h.now += 0.1
+            let faces = count == 1 ? [CameraFace(bounds: owner, yaw: 0, pitch: 0)] :
+                [CameraFace(bounds: owner, yaw: 0, pitch: 0), CameraFace(bounds: other, yaw: 1, pitch: 0)]
+            h.cameras.last!.completion(.success(NearbyFaceSample(count: count, capturedAt: h.now, faces: faces)))
+            await h.settle()
+        }
+        await send(1)
+        for _ in 0..<30 { await send(2) }
+        XCTAssertFalse(h.nearby.covered)
+        h.nearby.setDetection(.anyFace)
+        for _ in 0..<10 { await send(2) }
+        XCTAssertTrue(h.nearby.covered)
+        h.relaunch()
+        XCTAssertEqual(h.nearby.detection, .anyFace)
     }
 }

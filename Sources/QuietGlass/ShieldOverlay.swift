@@ -1,6 +1,7 @@
 // Clinton Imaro was here 20/09/2026.
 
 import AppKit
+import QuartzCore
 import ScreenCaptureKit
 import ShieldCore
 import OSLog
@@ -14,6 +15,9 @@ final class ShieldSurface {
     let panel: ShieldPanel
     private let imageLayer = CALayer()
     private let gradient = CAGradientLayer()
+    private let startupCover = CALayer()
+    private static let maskPositions = stride(from: 0.0, through: 1.0, by: 1.0 / 64).map { $0 }
+    private static let maskLocations = maskPositions.map(NSNumber.init(value:))
     private var requestedCoverage = 0.0
     var hasImage: Bool { imageLayer.contents != nil }
 
@@ -36,6 +40,10 @@ final class ShieldSurface {
         view.layer = imageLayer
         imageLayer.backgroundColor = NSColor.clear.cgColor
         imageLayer.contentsGravity = .resize
+        startupCover.backgroundColor = DisplayCapture.background
+        startupCover.opacity = 0
+        imageLayer.addSublayer(startupCover)
+        gradient.locations = Self.maskLocations
         panel.contentView = view
     }
 
@@ -45,6 +53,7 @@ final class ShieldSurface {
         if panel.frame != frame { panel.setFrame(frame, display: true) }
         imageLayer.frame = NSRect(origin: .zero, size: frame.size)
         gradient.frame = imageLayer.bounds
+        startupCover.frame = imageLayer.bounds
         CATransaction.commit()
     }
 
@@ -66,27 +75,48 @@ final class ShieldSurface {
         case .up: gradient.startPoint = CGPoint(x: 0.5, y: 1); gradient.endPoint = CGPoint(x: 0.5, y: 0)
         case .down: gradient.startPoint = CGPoint(x: 0.5, y: 0); gradient.endPoint = CGPoint(x: 0.5, y: 1)
         }
-        let positions = stride(from: 0.0, through: 1.0, by: 1.0 / 32).map { $0 }
-        gradient.colors = positions.map { NSColor.black.withAlphaComponent(GlassMask.opacity(position: $0, coverage: coverage)).cgColor }
-        gradient.locations = positions.map(NSNumber.init(value:))
+        gradient.colors = Self.maskPositions.map { NSColor.black.withAlphaComponent(GlassMask.opacity(position: $0, coverage: coverage)).cgColor }
         imageLayer.mask = coverage >= 0.999 ? nil : gradient
         CATransaction.commit()
         if !panel.isVisible { panel.orderFrontRegardless() }
     }
 
     func setImage(_ image: CGImage) {
+        let revealFirstFrame = !hasImage && requestedCoverage > 0
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         imageLayer.contents = image
         imageLayer.backgroundColor = nil
+        if revealFirstFrame {
+            // Fade the temporary cover onto already-blurred pixels. Never fade
+            // the panel itself, which would expose the clear desktop beneath it.
+            startupCover.frame = imageLayer.bounds
+            let reveal = CABasicAnimation(keyPath: "opacity")
+            reveal.fromValue = 1
+            reveal.toValue = 0
+            reveal.duration = 0.22
+            reveal.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            startupCover.add(reveal, forKey: "firstFrame")
+        }
         CATransaction.commit()
     }
 
     func clear() {
         requestedCoverage = 0
         panel.orderOut(nil)
+        startupCover.removeAllAnimations()
         imageLayer.contents = nil
         imageLayer.backgroundColor = nil
+    }
+}
+
+@MainActor
+private final class ShieldFrameTarget: NSObject {
+    weak var overlay: ShieldOverlay?
+
+    @objc func drawFrame(_ link: CADisplayLink) {
+        guard let overlay else { link.invalidate(); return }
+        overlay.animate(link)
     }
 }
 
@@ -107,7 +137,8 @@ final class ShieldOverlay {
     private var captureTask: Task<Void, Never>?
     private var pendingFade: Task<Void, Never>?
     private var refreshTimer: Timer?
-    private var animationTimer: Timer?
+    private var animationLink: CADisplayLink?
+    private let frameTarget = ShieldFrameTarget()
     private var generation = 0
     private var active = false
     private var displayedCoverage = 0.0
@@ -116,7 +147,7 @@ final class ShieldOverlay {
     private var displayTargets: [CGDirectDisplayID: Double]?
     private var displayTransitions: [CGDirectDisplayID: GlassTransition] = [:]
     private var displayValues: [CGDirectDisplayID: Double] = [:]
-    private var lastFrameTime = 0.0
+    private var lastFrameTime: CFTimeInterval?
     private var direction: ShieldDirection = .left
     private var blurRadius = 28.0
     private let logger = Logger(subsystem: "local.clinton.QuietGlass", category: "Blur")
@@ -162,20 +193,24 @@ final class ShieldOverlay {
     }
 
     private func startAnimation() {
-        guard animationTimer == nil else { return }
-        let frameRate = NSScreen.screens.map(\.maximumFramesPerSecond).max() ?? 60
-        let frameInterval = 1.0 / Double(max(60, frameRate))
-        lastFrameTime = ProcessInfo.processInfo.systemUptime - frameInterval
-        animationTimer = Timer(timeInterval: frameInterval, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.animate() }
+        let hasUnsettledDisplay = surfaces.keys.contains {
+            (displayValues[$0] ?? 0) != (displayTargets?[$0] ?? targetCoverage)
         }
-        RunLoop.main.add(animationTimer!, forMode: .common)
-        animate()
+        guard animationLink == nil, displayedCoverage != targetCoverage || hasUnsettledDisplay,
+              let screen = NSScreen.screens.max(by: { $0.maximumFramesPerSecond < $1.maximumFramesPerSecond }) else { return }
+        frameTarget.overlay = self
+        let link = screen.displayLink(target: frameTarget, selector: #selector(ShieldFrameTarget.drawFrame(_:)))
+        let frameRate = Float(screen.maximumFramesPerSecond > 0 ? screen.maximumFramesPerSecond : 60)
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: min(60, frameRate), maximum: frameRate, preferred: frameRate)
+        lastFrameTime = nil
+        animationLink = link
+        link.add(to: .main, forMode: .common)
     }
 
-    private func animate() {
-        let now = ProcessInfo.processInfo.systemUptime
-        let elapsed = now - lastFrameTime
+    fileprivate func animate(_ link: CADisplayLink) {
+        guard link === animationLink else { return }
+        let now = link.targetTimestamp
+        let elapsed = now - (lastFrameTime ?? link.timestamp)
         displayedCoverage = transition.advance(to: targetCoverage, elapsed: elapsed)
         lastFrameTime = now
         var settled = true
@@ -189,8 +224,8 @@ final class ShieldOverlay {
             if value != target { settled = false }
         }
         if settled, displayedCoverage == targetCoverage {
-            animationTimer?.invalidate()
-            animationTimer = nil
+            animationLink?.invalidate()
+            animationLink = nil
             if targetCoverage == 0 { clear() }
         }
     }
@@ -200,7 +235,8 @@ final class ShieldOverlay {
         active = false
         pendingFade?.cancel(); pendingFade = nil
         generation += 1
-        animationTimer?.invalidate(); animationTimer = nil
+        animationLink?.invalidate(); animationLink = nil
+        lastFrameTime = nil
         refreshTimer?.invalidate(); refreshTimer = nil
         captureTask?.cancel(); captureTask = nil
         for capture in captures.values { capture.stop() }
@@ -234,6 +270,12 @@ final class ShieldOverlay {
         }
         restoreVisibility()
         capture()
+        // A display link belongs to its screen. Rebind after display changes
+        // so unplugging a monitor cannot strand an unfinished transition.
+        if animationLink != nil {
+            animationLink?.invalidate(); animationLink = nil
+            startAnimation()
+        }
     }
 
     func activeSpaceChanged() {
@@ -288,7 +330,7 @@ final class ShieldOverlay {
                                   self.captures[id]?.id == sessionID else { return }
                             self.surfaces[id]?.setImage(image)
                             self.surfaces[id]?.update(coverage: self.displayValues[id] ?? self.displayedCoverage, direction: self.direction)
-                            if self.displayedCoverage != self.targetCoverage || self.displayTargets != nil { self.startAnimation() }
+                            self.startAnimation()
                             self.onCaptureStatus?(nil)
                         }, onFailure: { [weak self] error in
                             guard let self, self.generation == token,

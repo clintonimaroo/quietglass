@@ -38,7 +38,7 @@ enum NearbyCameraStatus: Equatable {
 }
 
 enum NearbyPauseReason: Hashable {
-    case systemSleep, displaySleep, inactiveSession, protectionTest
+    case systemSleep, displaySleep, inactiveSession, protectionTest, ownerEnrollment
 }
 
 struct NearbyFaceSample {
@@ -47,6 +47,19 @@ struct NearbyFaceSample {
     var vector: [Float]? = nil
     var pose: OwnerPose? = nil
     var bounds: [CGRect] = []
+    var faces: [CameraFace]? = nil
+    var identities: [CameraIdentity?] = []
+}
+
+struct CameraIdentity {
+    let vector: [Float]
+    let pose: OwnerPose
+}
+
+enum NearbyDetection: String, CaseIterable, Identifiable {
+    case facingScreen, anyFace
+    var id: String { rawValue }
+    var title: String { self == .facingScreen ? "Facing screen" : "Any extra face" }
 }
 
 protocol NearbyCameraSession: AnyObject {
@@ -69,6 +82,7 @@ final class NearbyPeople: ObservableObject {
         case checking, matching, unmatched, unreadable, noFace, additionalFaces
     }
     // The switch represents the user's choice, not temporary camera availability.
+    @Published private(set) var detection: NearbyDetection
     @Published private(set) var wantsMonitoring: Bool
     @Published private(set) var enabled = false
     @Published private(set) var requesting = false
@@ -94,6 +108,7 @@ final class NearbyPeople: ObservableObject {
     private let usesWatchdog: Bool
     private var worker: NearbyCameraSession?
     private var presence = NearbyPresence()
+    private var attention = NearbyAttentionPolicy()
     private var generation = 0
     private var lastFrame: TimeInterval = 0
     private var lastAcceptedFrame: TimeInterval?
@@ -118,7 +133,7 @@ final class NearbyPeople: ObservableObject {
 
     init(preferences: UserDefaults = .standard,
          cameraAccess: @escaping () async -> Bool = NearbyPeople.requestCameraAccess,
-         makeCamera: @escaping (@escaping (Result<NearbyFaceSample, NearbyCameraFailure>) -> Void) -> NearbyCameraSession = { FaceCamera(completion: $0) },
+         makeCamera: @escaping (@escaping (Result<NearbyFaceSample, NearbyCameraFailure>) -> Void) -> NearbyCameraSession = { SharedFaceCamera(completion: $0) },
          clock: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
          wallClock: @escaping () -> Date = Date.init,
          usesWatchdog: Bool = true, owner: OwnerRecognition? = nil) {
@@ -130,6 +145,7 @@ final class NearbyPeople: ObservableObject {
         self.usesWatchdog = usesWatchdog
         self.owner = owner ?? OwnerRecognition(preferences: preferences)
         selectedCameraID = preferences.string(forKey: CameraSelection.preferenceKey) ?? ""
+        detection = NearbyDetection(rawValue: preferences.string(forKey: "nearbyDetection") ?? "") ?? .facingScreen
         wantsMonitoring = preferences.bool(forKey: "nearbyEnabled")
         response = NearbyResponse(rawValue: preferences.string(forKey: "nearbyResponse") ?? "") ?? .blur
         warningSoundEnabled = preferences.object(forKey: "nearbyWarningSound") as? Bool ?? true
@@ -219,8 +235,15 @@ final class NearbyPeople: ObservableObject {
             }
             if count == 0 { return covered ? "No face in view · Blur stays on" : "No face in view · Detection is limited" }
             if alertActive { return count > 1 ? "Additional face detected" : "Waiting for a steady single face…" }
-            return count > 1 ? "Checking an additional face…" : "One face in view"
+            return count > 1 ? "Checking nearby head directions…" : "One face in view"
         }
+    }
+
+    func setDetection(_ value: NearbyDetection) {
+        detection = value
+        preferences.set(value.rawValue, forKey: "nearbyDetection")
+        attention = NearbyAttentionPolicy()
+        presence.interrupt()
     }
 
     func setResponse(_ value: NearbyResponse) {
@@ -339,6 +362,7 @@ final class NearbyPeople: ObservableObject {
         worker?.stop(); worker = nil
         watchdog?.invalidate(); watchdog = nil
         presence.interrupt()
+        attention = NearbyAttentionPolicy()
         ownerRequired = owner.enabled
         ownerPresence = OwnerPresence(turnPositive: Bool.random())
         resetOwnerNotice()
@@ -408,27 +432,41 @@ final class NearbyPeople: ObservableObject {
         }
         lastAcceptedFrame = sample.capturedAt
         lastFrame = sample.capturedAt
+        let ownerIndices = sample.identities.indices.filter { index in
+            guard let identity = sample.identities[index] else { return false }
+            return owner.template?.matches(identity.vector) == true && identity.pose.isValid
+        }
+        let ownerIndex = ownerIndices.count == 1 ? ownerIndices.first : nil
+        let facingThreat: Bool
+        if let faces = sample.faces {
+            facingThreat = attention.observe(faces, ownerIndex: ownerRequired ? ownerIndex : nil, at: sample.capturedAt)
+        } else { facingThreat = sample.count > 1 }
+        let extraThreat = detection == .anyFace ? sample.count > 1 : facingThreat
         let detected: Bool
         if ownerRequired {
-            let template = owner.template
-            let ownerMatches = sample.count == 1 && sample.vector.map { template?.matches($0) == true } == true && sample.pose?.isValid == true
-            let lostLandmarks = sample.count == 1 && (sample.vector == nil || sample.pose?.isValid != true) &&
-                OwnerPresence.isContinuousFace(lastMatchedBounds, sample.bounds.first)
-            detected = ownerPresence.observe(matches: ownerMatches, pose: sample.pose, openEyes: template?.openEyes ?? 0.3,
+            let identity = ownerIndex.flatMap { sample.identities[$0] }
+            let vector = identity?.vector ?? (sample.count == 1 ? sample.vector : nil)
+            let pose = identity?.pose ?? (sample.count == 1 ? sample.pose : nil)
+            let ownerMatches = !extraThreat && vector.map { owner.template?.matches($0) == true } == true && pose?.isValid == true
+            let ownerBounds = ownerIndex.flatMap { sample.bounds.indices.contains($0) ? sample.bounds[$0] : nil } ?? (sample.count == 1 ? sample.bounds.first : nil)
+            let lostLandmarks = sample.count == 1 && (vector == nil || pose?.isValid != true) &&
+                OwnerPresence.isContinuousFace(lastMatchedBounds, ownerBounds)
+            detected = ownerPresence.observe(matches: ownerMatches, pose: pose, openEyes: owner.template?.openEyes ?? 0.3,
                                              at: sample.capturedAt, continuousFaceWithMissingLandmarks: lostLandmarks)
-            if ownerMatches { lastMatchedBounds = sample.bounds.first }
+            if ownerMatches { lastMatchedBounds = ownerBounds }
             else if !lostLandmarks { lastMatchedBounds = nil }
             if detected && !alertActive && !ownerPresence.recoveringLandmarks { ownerPresence.interrupt(turnPositive: Bool.random()) }
             let prompt = ownerPresence.recoveringLandmarks ? "Face the camera again" : ownerPresence.challenge.prompt
             if ownerPrompt != prompt { ownerPrompt = prompt }
             let observation: OwnerNoticeState
-            if sample.count > 1 { observation = .additionalFaces }
+            if extraThreat { observation = .additionalFaces }
             else if sample.count == 0 { observation = .noFace }
-            else if sample.vector == nil || sample.pose?.isValid != true { observation = .unreadable }
+            else if vector == nil || pose?.isValid != true { observation = .unreadable }
             else { observation = ownerMatches ? .matching : .unmatched }
             updateOwnerNotice(observation, at: sample.capturedAt)
         } else {
-            detected = presence.observe(faceCount: sample.count, at: sample.capturedAt)
+            // Preserve the existing steady-clear and no-face behavior.
+            detected = presence.observe(faceCount: sample.count == 0 ? 0 : extraThreat ? 2 : 1, at: sample.capturedAt)
         }
         if detected != alertActive { alertActive = detected }
         let next = NearbyCameraStatus.watching(sample.count)
@@ -549,6 +587,7 @@ final class NearbyPeople: ObservableObject {
         immediateBlur = false
         warmingCapture = false
         presence = NearbyPresence()
+        attention = NearbyAttentionPolicy()
         owner.endMonitoring()
         ownerRequired = false
         resetOwnerNotice()
@@ -561,7 +600,8 @@ final class NearbyPeople: ObservableObject {
 }
 
 final class FaceCamera: NSObject, NearbyCameraSession, AVCaptureVideoDataOutputSampleBufferDelegate {
-    private let queue = DispatchQueue(label: "local.clinton.QuietGlass.camera", qos: .userInitiated)
+    private static let captureQueue = DispatchQueue(label: "local.clinton.QuietGlass.camera", qos: .userInitiated)
+    private let queue = FaceCamera.captureQueue
     private let session = AVCaptureSession()
     var previewSession: AVCaptureSession? { session }
     private let completion: (Result<NearbyFaceSample, NearbyCameraFailure>) -> Void
@@ -577,14 +617,23 @@ final class FaceCamera: NSObject, NearbyCameraSession, AVCaptureVideoDataOutputS
         self.recognition = recognition; self.completion = completion
     }
 
-    func configureRecognition(_ enabled: Bool) { queue.async { [self] in recognition = enabled } }
+    func configureRecognition(_ enabled: Bool) {
+        queue.async { [self] in
+            guard !stopped else { return }
+            recognition = enabled
+            if enabled && recognizer == nil {
+                do { recognizer = try OwnerFaceModel() }
+                catch { completion(.failure(.recognition)) }
+            } else if !enabled { recognizer = nil }
+        }
+    }
     func configureDevice(_ id: String?) { queue.async { [self] in deviceID = id } }
 
     func start() {
         queue.async { [self] in
             guard !stopped else { return }
             do {
-                if recognition {
+                if recognition && recognizer == nil {
                     do { recognizer = try OwnerFaceModel() }
                     catch { throw NearbyCameraFailure.recognition }
                 }
@@ -620,7 +669,7 @@ final class FaceCamera: NSObject, NearbyCameraSession, AVCaptureVideoDataOutputS
     }
 
     private func limitFrameRate(_ device: AVCaptureDevice) {
-        let fps: Double = recognition ? 10 : 5
+        let fps: Double = 10
         guard let range = device.activeFormat.videoSupportedFrameRateRanges.first(where: { $0.minFrameRate <= fps && $0.maxFrameRate >= fps }),
               (try? device.lockForConfiguration()) != nil else { return }
         defer { device.unlockForConfiguration() }
@@ -658,7 +707,7 @@ final class FaceCamera: NSObject, NearbyCameraSession, AVCaptureVideoDataOutputS
 
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         let now = ProcessInfo.processInfo.systemUptime
-        guard !stopped, now - lastScan >= (recognition ? 0.09 : 0.2), let buffer = sampleBuffer.imageBuffer else { return }
+        guard !stopped, now - lastScan >= 0.09, let buffer = sampleBuffer.imageBuffer else { return }
         lastScan = now
         do {
             let sample = try autoreleasepool {
@@ -667,14 +716,20 @@ final class FaceCamera: NSObject, NearbyCameraSession, AVCaptureVideoDataOutputS
                     faces = try OwnerFaceDetector.observations(in: buffer)
                 } else {
                     let request = VNDetectFaceRectanglesRequest()
+                    request.revision = VNDetectFaceRectanglesRequestRevision3
                     try VNImageRequestHandler(cvPixelBuffer: buffer, orientation: .up, options: [:]).perform([request])
                     faces = (request.results ?? []).filter { $0.confidence >= 0.6 }
                 }
                 var sample = NearbyFaceSample(count: faces.count, capturedAt: now, bounds: faces.map(\.boundingBox))
-                if recognition, faces.count == 1 {
+                sample.faces = faces.map { CameraFace(bounds: $0.boundingBox, yaw: $0.yaw?.doubleValue, pitch: $0.pitch?.doubleValue) }
+                if recognition {
                     guard let recognizer else { throw OwnerModelError.unavailable }
-                    if let features = try recognizer.features(buffer: buffer, face: faces[0]) {
-                        sample.vector = features.vector; sample.pose = features.pose
+                    sample.identities = try faces.map { face in
+                        guard let features = try recognizer.features(buffer: buffer, face: face) else { return nil }
+                        return CameraIdentity(vector: features.vector, pose: features.pose)
+                    }
+                    if faces.count == 1, let identity = sample.identities.first ?? nil {
+                        sample.vector = identity.vector; sample.pose = identity.pose
                     }
                 }
                 return sample

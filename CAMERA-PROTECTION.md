@@ -2,6 +2,14 @@
 
 **Nearby people** detects additional faces in the camera’s view and either warns you beside the notch or blurs your displays. AirPods are not required. Optional **Recognize me** checks your saved face before clearing that response.
 
+## Camera head tracking
+
+Open **Settings → Head tracking**, choose **Camera**, then **Start tracking**. Look at the screen with only your face in view and hold still for calibration. Turn away to blur; face the screen steadily to clear. Brief glances and short tracking gaps are filtered. Once calibrated, a missing face or stale camera feed keeps the screen protected; retry a failed camera from this page. **Escape** clears protection and stops camera tracking. Use **Recalibrate** after changing your position.
+
+Camera mode covers all displays together. Per-display calibration remains an AirPods feature. The tracking source and camera choice are saved; head tracking starts when you choose Start. Camera tracking and Nearby people share capture while both are on. Pausing Nearby people does not stop camera head tracking, and pausing head tracking does not stop Nearby people.
+
+Camera tracking alone does not authenticate the returning person. Enable Nearby people and Recognize me when clearing should also require your saved face. Camera setup and coverage testing temporarily pause head tracking; returning to it requires a fresh calibration.
+
 ## Setup
 
 1. Open **Settings → Protection → Nearby people** and enable **Detect additional faces**. Allow camera access when prompted.
@@ -17,12 +25,20 @@ Choose **Automatic** or a specific camera, then click **Run check**. Click **Sta
 
 **Try warning** demonstrates a three-second warning followed by three seconds of blur. **Try blur** demonstrates immediate blur for three seconds. These tests leave your normal delay unchanged. Nearby monitoring pauses during the check and resumes when you finish; camera frames are never saved. Escape stops the demonstration and monitoring.
 
+## Detection choices
+
+**Facing screen** tracks each visible face and waits for sustained, roughly forward head orientation before treating an additional person as a potential observer. Short appearances and people clearly facing away are filtered. Missing head angles use a longer, conservative delay. **Any extra face** retains the count-based response. The choice is remembered.
+
+This estimates head direction relative to the camera, not eye gaze or whether someone is reading a display. Camera placement, crowded scenes, crossings, glasses, and lighting can affect the result. Real café/office false-alarm rates have not been established. Use Any extra face for the more cautious response.
+
+With Recognize me, the owner is matched among visible faces; a background person facing away need not prevent owner verification. An unverified owner still cannot clear protection, regardless of the other people's directions.
+
 ## How it behaves
 
 - Detection and response preferences are remembered across launches. Monitoring pauses during sleep or an inactive login session and resumes when you return. Owner recognition requires authentication for each new monitoring session.
-- Without Recognize me, a steady single face clears the response; it does not have to be your face. With Recognize me, clearing requires a matching face, a small head turn in the prompted direction, and a look back at the camera.
+- Without Recognize me, a steady view with no qualifying additional face clears the response; the remaining person does not have to be you. With Recognize me, clearing requires a matching face, a small head turn in the prompted direction, and a look back at the camera.
 - **Warn me** shows a countdown, then blurs if the warning is still unresolved. Clearing the warning cancels its timer; Escape stops monitoring. Hovering over the notch, opening Settings, or changing verification prompts does not restart the timer. A camera failure also starts a countdown. Once blur starts, extending the delay does not clear it; the warning must resolve or monitoring must be stopped. **Blur automatically** skips the warning delay.
-- Click the notch warning to open **Nearby people** settings. Use **Blur now** there to cover immediately. **Pause 5 min** stops the camera and clears the camera response, with a visible resume countdown. **Resume** restarts it early. The pause survives relaunch, and a deadline reached while your Mac is asleep waits until the session is active again. Turning detection off or pressing Escape cancels automatic resume.
+- Click the notch warning to open **Nearby people** settings. Use **Blur now** there to cover immediately. **Pause 5 min** pauses Nearby people and clears its response (camera head tracking can continue), with a visible resume countdown. **Resume** restarts it early. The pause survives relaunch, and a deadline reached while your Mac is asleep waits until the session is active again. Turning detection off or pressing Escape cancels automatic resume.
 - After successful owner verification, a brief landmark loss on the continuously visible face can recover without another head turn. Protection still covers after sustained uncertainty and clears only after fresh, steady matching samples. A different face, loss of the face, a stale sample gap, or an expired recovery window requires the complete movement check again. Matching thresholds are unchanged.
 - Notices distinguish another face, no visible face, an unreadable face, and an unmatched face. Brief camera fluctuations do not replace the current instruction; this filtering affects the text, not the protection decision.
 - Brief changes are filtered to reduce flickering. A missing face or camera failure does not clear an active response; use the status and recovery controls in Settings.

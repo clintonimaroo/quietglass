@@ -2,9 +2,11 @@
 
 **Privacy for what’s on your Mac.**
 
-[Download for Mac](https://github.com/clintonimaroo/quietglass/releases/latest) · macOS 14 or later · Apple silicon and Intel
+[Download for Mac](https://github.com/clintonimaroo/quietglass/releases/download/v0.1.2/QuietGlass-0.1.2-macOS-universal.dmg) · [Release notes](https://github.com/clintonimaroo/quietglass/releases/tag/v0.1.2)
 
-QuietGlass is an open-source, native macOS app that helps keep your work private in cafés, shared offices, classrooms, and other places where people can see your screen. With compatible AirPods, it blurs your displays when you look away and clears them when you look back.
+**0.1.2 · Build 3** · macOS 14 or later · Apple silicon and Intel
+
+QuietGlass is an open-source, native macOS app that helps keep your work private in cafés, shared offices, classrooms, and other places where people can see your screen. Choose compatible AirPods or a camera to blur your displays when you look away and clear them when you look back.
 
 Privacy also matters while you’re looking at your screen. **Nearby people spots another face in your camera’s view and warns you or blurs the screen, even while you’re still looking.** It works without AirPods. Optional **Recognize me** checks your saved face and a short movement sequence before clearing the camera response.
 
@@ -18,14 +20,14 @@ For everyday control, blur every display instantly, protect a specific window or
 
 | Feature | What it does |
 | --- | --- |
-| Look-away protection | Uses compatible AirPods to detect changes in head direction and apply screen blur. |
+| Look-away protection | Uses Camera or AirPods, with calibration, brief-glance filtering in Camera mode, and smooth blur transitions. |
 | Instant privacy | Blurs your displays with a keyboard shortcut or the on-screen controls. |
 | Window and area protection | Covers a selected window or area; saved areas return for matching window titles after relaunch. |
 | Focus mode | Keeps the active window clear while blurring surrounding content. |
 | Protection profiles | Provides Home, Office, Public, and Focus presets, with adjustable blur and sensitivity. |
 | App rules | Sets head-tracking sensitivity per app and can automatically blur its visible windows. |
 | Sensitive text detection | Identifies supported sensitive content and custom phrases using local text recognition. |
-| Nearby people | Uses the camera to detect additional visible faces and respond with a warning or automatic blur. |
+| Nearby people | Tracks additional faces and their estimated head direction; offers Facing screen or Any extra face detection. |
 | Recognize me | Adds optional owner face enrollment and matching to camera-based protection. |
 | Camera coverage check | Choose a camera, preview visible faces, check both sides, and try your response. |
 | Warning actions | Click the notch warning to open Nearby people settings, then blur immediately, pause for five minutes, or resume. |
@@ -36,14 +38,14 @@ For everyday control, blur every display instantly, protect a specific window or
 ### Requirements
 
 - macOS 14 or later
-- Compatible AirPods for head tracking
+- Compatible AirPods or a camera for head tracking
 - A camera for Nearby people and Recognize me
 
 Manual screen blur, window protection, area protection, and Focus mode work without AirPods or a camera.
 
 ### Installation
 
-1. Download the latest DMG, open it, and drag **QuietGlass** into **Applications**. A ZIP is also available.
+1. Download the DMG above, open it, and drag **QuietGlass** into **Applications**. A [ZIP](https://github.com/clintonimaroo/quietglass/releases/download/v0.1.2/QuietGlass-0.1.2-macOS-universal.zip) is also available. Quit an older copy before replacing it.
 2. Open QuietGlass from Applications, then eject the installer.
 3. Grant **Screen Recording** access when prompted. Allow Camera or Motion & Fitness only for the features you enable.
 4. Use the QuietGlass menu bar icon or hover over the floating control bar to open controls and Settings.
@@ -55,8 +57,9 @@ Choose **QuietGlass Help** from the menu for an offline setup and troubleshootin
 ### Choose your setup
 
 - **For immediate privacy:** use **Blur screen now**, or press **⌃⌥⌘P**.
-- **For look-away protection:** connect your AirPods, select **Start tracking**, and follow the calibration steps.
+- **For look-away protection:** open **Settings → Head tracking** and choose **Camera** or **AirPods**. Start tracking and calibrate while facing your screen. Camera mode needs a single steady face; it estimates head direction, not eye gaze.
 - **For camera protection:** open **Settings → Protection → Nearby people** and enable detection. **Warn me** gives you 2 minutes to respond before blurring; use **Blur after** to change the delay. **Blur automatically** covers the screen as soon as detection is confirmed.
+- **For background faces:** choose **Facing screen** to consider head direction and how long a face stays visible, or **Any extra face** for the more cautious count-based response. Head direction is an estimate, not proof someone is reading your screen.
 - **To check camera coverage:** choose a camera and click **Run check**. A person must enter the camera’s view to be detected; a wider-view webcam can help cover the sides.
 - **For repeatable app protection:** add an app under App rules and enable **Automatically protect windows**. Use **Remember** on a selected area to restore it for windows with the same app and title. Pause or Escape clears coverage without deleting these saved rules.
 - **For owner recognition:** select **Set up my face**, authenticate with Touch ID or your Mac password, and follow the circular camera guide. Save your face when enrollment is complete.
@@ -71,7 +74,7 @@ QuietGlass requests permissions for the features you choose to use.
 | --- | --- |
 | Screen Recording | Captures screen content for blur rendering and local text analysis. |
 | Motion & Fitness | Reads supported AirPods motion for head tracking. |
-| Camera | Supports nearby-person detection and optional owner enrollment. |
+| Camera | Supports camera head tracking, nearby-person detection, coverage checks, and optional owner enrollment. |
 | Touch ID or Mac password | Authorizes owner enrollment and access to saved face data. |
 
 ## Keyboard shortcuts
@@ -92,7 +95,7 @@ QuietGlass processes screen content, recognized text, camera frames, and motion 
 - Screen images, camera frames, recognized text, and motion history are processed without being saved or uploaded by QuietGlass.
 - Preferences, app rules, saved area coordinates, and custom phrases are stored locally. Saved areas match a one-way digest of the window title; the title itself is not stored.
 - Optional owner enrollment stores a face template in the encrypted macOS Keychain. Saved face data can be deleted in Settings.
-- Camera access is limited to enrollment, enabled Nearby people monitoring, and an explicitly started coverage check. Your detection setting is remembered across app launches. Monitoring pauses while your Mac is inactive and resumes when you return. Turning detection off or pressing Escape keeps it off until you enable it again.
+- Camera access is limited to enabled camera head tracking, enrollment, Nearby people monitoring, and an explicitly started coverage check. Your Nearby people setting is remembered across app launches. Monitoring pauses while your Mac is inactive and resumes when you return. Turning detection off or pressing Escape keeps it off until you enable it again. Head tracking starts when you choose **Start tracking**; its Camera/AirPods source choice is remembered.
 - Update checks contact GitHub for public release metadata. They do not include screen content, camera data, face templates, or custom phrases, and automatic checks are off by default.
 - QuietGlass does not record microphone audio.
 - Core protection features do not require a hosted backend or cloud inference.
@@ -156,7 +159,7 @@ The application layer manages windows, controls, permissions, and system integra
 | Interface and desktop integration | SwiftUI, AppKit |
 | Screen capture and blur | ScreenCaptureKit, Core Image |
 | AirPods head tracking | Core Motion |
-| Camera input | AVFoundation |
+| Camera input and head direction | AVFoundation, Vision |
 | Text and face detection | Vision |
 | Owner face matching | Core ML with the bundled SFace model |
 | Authentication and template storage | LocalAuthentication, macOS Keychain |

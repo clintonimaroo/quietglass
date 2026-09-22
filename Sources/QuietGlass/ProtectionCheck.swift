@@ -71,7 +71,7 @@ final class ProtectionCheck: ObservableObject {
               sample.capturedAt <= clock(), clock() - sample.capturedAt <= 1 else { return }
         lastFrame = sample.capturedAt
         faces = sample.bounds.filter { !$0.isEmpty && $0.minX >= 0 && $0.minY >= 0 && $0.maxX <= 1 && $0.maxY <= 1 }
-        message = sample.count == 1 ? "One face in view" : "\(sample.count) faces in view"
+        message = sample.count == 0 ? "No faces in view" : sample.count == 1 ? "One face in view" : "\(sample.count) faces in view"
         if sample.count == 1, let face = faces.first, (0.33...0.67).contains(face.midX) { sawCenter = true }
         if sawCenter, faces.count > 1 {
             // The maker stays in the center while the second person enters each edge.
@@ -127,6 +127,7 @@ struct ProtectionCheckView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var showingDetails = false
+    @State private var previewAspectRatio: CGFloat = 16.0 / 9.0
     private let accent = Color(red: 0.94, green: 0.68, blue: 0.91)
     private let secondary = Color(white: 0.58)
 
@@ -188,22 +189,25 @@ struct ProtectionCheckView: View {
 
     @ViewBuilder private var cameraStage: some View {
         if let session = check.session {
-            CoverageCameraPreview(session: session, faces: check.faces)
-                .aspectRatio(4 / 3, contentMode: .fit)
-                .frame(maxWidth: 352)
+            CoverageCameraPreview(session: session, faces: check.faces, aspectRatio: $previewAspectRatio)
+                .aspectRatio(previewAspectRatio, contentMode: .fit)
+                .frame(maxWidth: .infinity)
                 .background(.black)
                 .clipShape(RoundedRectangle(cornerRadius: 16))
                 .accessibilityLabel("Live camera coverage")
-                .overlay(alignment: .bottom) {
-                    Text(check.message).font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(.white).padding(.horizontal, 12).padding(.vertical, 7)
-                        .background(.black.opacity(0.7), in: Capsule()).padding(12)
+                .overlay(alignment: .bottomLeading) {
+                    HStack(spacing: 6) {
+                        Circle().fill(check.faces.isEmpty ? secondary : accent).frame(width: 5, height: 5)
+                        Text(check.message).font(.system(size: 11, weight: .medium))
+                    }
+                        .foregroundStyle(.white).padding(.horizontal, 10).padding(.vertical, 6)
+                        .background(.black.opacity(0.6), in: Capsule()).padding(10)
                         .allowsHitTesting(false)
                 }
         } else {
             VStack(spacing: 12) {
-                CoverageGuide(accent: accent).frame(width: 184, height: 100)
-                    .padding(.bottom, 8).accessibilityHidden(true)
+                CoverageGuide(accent: accent).frame(width: 224, height: 132)
+                    .padding(.bottom, 4).accessibilityHidden(true)
                 VStack(spacing: 8) {
                     Text(check.running ? "Starting camera…" : "Check the space around you")
                         .font(.system(size: 16, weight: .medium))
@@ -308,17 +312,31 @@ struct ProtectionCheckView: View {
 private struct CoverageGuide: View {
     let accent: Color
     var body: some View {
-        ZStack {
-            HStack(alignment: .bottom, spacing: 18) {
-                Image(systemName: "person.fill").font(.system(size: 26, weight: .light))
-                    .foregroundStyle(.white.opacity(0.22))
-                Image(systemName: "person.fill").font(.system(size: 44, weight: .light))
-                    .foregroundStyle(accent)
-                Image(systemName: "person.fill").font(.system(size: 26, weight: .light))
-                    .foregroundStyle(.white.opacity(0.22))
+        VStack(spacing: 5) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color(white: 0.115))
+                RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(.white.opacity(0.14), lineWidth: 1)
+                Circle().fill(accent.opacity(0.75))
+                    .frame(width: 3, height: 3).offset(y: -46)
+                HStack(spacing: 22) {
+                    Image(systemName: "person").font(.system(size: 24, weight: .ultraLight))
+                        .foregroundStyle(.white.opacity(0.32))
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 15).fill(accent.opacity(0.045))
+                        FaceOutline().stroke(accent, style: StrokeStyle(lineWidth: 1.1, lineCap: .round, lineJoin: .round))
+                            .frame(width: 31, height: 38)
+                        CoverageCorners().stroke(accent.opacity(0.7), style: StrokeStyle(lineWidth: 1, lineCap: .round))
+                    }
+                    .frame(width: 55, height: 64)
+                    Image(systemName: "person").font(.system(size: 24, weight: .ultraLight))
+                        .foregroundStyle(.white.opacity(0.32))
+                }
+                .offset(y: 4)
             }
-            .padding(.bottom, 2)
-            CoverageCorners().stroke(accent.opacity(0.55), style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+            .frame(width: 202, height: 112)
+            Capsule().fill(.white.opacity(0.18)).frame(height: 2)
         }
     }
 }
@@ -341,24 +359,34 @@ private struct CoverageCorners: Shape {
 private struct CoverageCameraPreview: NSViewRepresentable {
     let session: AVCaptureSession
     let faces: [CGRect]
+    @Binding var aspectRatio: CGFloat
     func makeNSView(context: Context) -> CoveragePreview { CoveragePreview(session: session) }
     func updateNSView(_ view: CoveragePreview, context: Context) {
         if view.preview.session !== session { view.preview.session = session }
+        view.onAspectRatio = { aspectRatio = $0 }
         view.faces = faces; view.needsLayout = true
     }
-    static func dismantleNSView(_ view: CoveragePreview, coordinator: ()) { view.preview.session = nil }
+    static func dismantleNSView(_ view: CoveragePreview, coordinator: ()) {
+        view.onAspectRatio = nil
+        view.preview.session = nil
+    }
 }
 
 private final class CoveragePreview: NSView {
     let preview: AVCaptureVideoPreviewLayer
     let boxes = CAShapeLayer()
     var faces: [CGRect] = []
+    var onAspectRatio: ((CGFloat) -> Void)?
+    private var reportedAspectRatio: CGFloat = 0
     init(session: AVCaptureSession) {
         preview = AVCaptureVideoPreviewLayer(session: session)
         super.init(frame: .zero); wantsLayer = true
         preview.videoGravity = .resizeAspect
+        layer?.masksToBounds = true
         layer?.addSublayer(preview); layer?.addSublayer(boxes)
-        boxes.fillColor = nil; boxes.strokeColor = NSColor.systemGreen.cgColor; boxes.lineWidth = 2
+        boxes.fillColor = nil
+        boxes.strokeColor = NSColor(calibratedRed: 0.94, green: 0.68, blue: 0.91, alpha: 0.9).cgColor
+        boxes.lineWidth = 1.5
     }
     required init?(coder: NSCoder) { nil }
     override func layout() {
@@ -366,6 +394,14 @@ private final class CoveragePreview: NSView {
         preview.frame = bounds; boxes.frame = bounds
         if let connection = preview.connection, connection.isVideoMirroringSupported {
             connection.automaticallyAdjustsVideoMirroring = false; connection.isVideoMirrored = true
+        }
+        // Match the actual preview image, including the camera's clean aperture,
+        // instead of cropping the edges that this coverage check is testing.
+        let videoRect = preview.layerRectConverted(fromMetadataOutputRect: CGRect(x: 0, y: 0, width: 1, height: 1))
+        let ratio = videoRect.width / videoRect.height
+        if ratio.isFinite, ratio > 0, abs(ratio - reportedAspectRatio) > 0.001 {
+            reportedAspectRatio = ratio
+            DispatchQueue.main.async { [weak self] in self?.onAspectRatio?(ratio) }
         }
         let path = CGMutablePath()
         for face in faces {

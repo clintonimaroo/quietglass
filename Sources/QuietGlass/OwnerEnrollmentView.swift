@@ -220,7 +220,7 @@ private final class OwnerCameraPreviewView: NSView {
     }
 }
 
-private struct FaceOutline: Shape {
+struct FaceOutline: Shape {
     func path(in rect: CGRect) -> Path {
         let w = rect.width, h = rect.height
         var p = Path()

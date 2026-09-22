@@ -61,6 +61,41 @@ final class FocusWindowTests: XCTestCase {
         XCTAssertTrue(blur.contains { $0.contains(CGPoint(x: background.midX, y: background.midY)) })
     }
 
+    func testScreenshotCanvasDoesNotHideProtectedWindows() {
+        // The macOS Screenshot canvas reports alpha 1 and a display-sized
+        // rectangle even while the document underneath is plainly visible.
+        let items = [window(screen, pid: 5, layer: 24), window(background, pid: 3)]
+        let content = PrivacyController.contentWindowItems(in: items,
+            bundleIdentifiers: [5: "com.apple.screencaptureui"], displayFrames: [screen])
+        let regions = PrivacyController.automaticRegions(in: content,
+            rules: [AppPrivacyRule(bundleID: "example.private", name: "Private", protectWindows: true)],
+            savedAreas: [], bundleIdentifiers: [3: "example.private"], appPID: 1, desktopTop: screen.maxY)
+        XCTAssertEqual(regions, [background], "The transparent recording canvas must not uncover the protected document")
+    }
+
+    func testScreenshotCanvasDoesNotHideFocusControlsAcrossDisplays() {
+        let otherDisplay = CGRect(x: -1600, y: -200, width: 1600, height: 1100)
+        let desktop = screen.union(otherDisplay)
+        for canvas in [screen, otherDisplay, desktop] {
+            let items = [window(canvas, pid: 5, layer: 24), window(settings, pid: 1)]
+            let quartzDisplays = [screen, otherDisplay].map {
+                CGRect(x: $0.minX, y: screen.maxY - $0.maxY, width: $0.width, height: $0.height)
+            }
+            let content = PrivacyController.contentWindowItems(in: items,
+                bundleIdentifiers: [5: "com.apple.screencaptureui"], displayFrames: quartzDisplays)
+            XCTAssertEqual(PrivacyController.visibleControlRegions(in: content, appPID: 1, desktopTop: screen.maxY),
+                           [settings], "The canvas must not paint background blur over visible controls")
+        }
+    }
+
+    func testScreenshotToolbarAndRealFullDisplayWindowsStillOcclude() {
+        let toolbar = CGRect(x: 260, y: 80, width: 660, height: 80)
+        let items = [window(toolbar, pid: 5, layer: 24), window(screen, pid: 6)]
+        let content = PrivacyController.contentWindowItems(in: items,
+            bundleIdentifiers: [5: "com.apple.screencaptureui", 6: "example.real-window"], displayFrames: [screen])
+        XCTAssertEqual(content.count, 2, "Only the known transparent capture canvas should be ignored")
+    }
+
     func testDockAndCursorDecorationsDoNotHideProtectedContent() {
         let cursor = CGRect(x: background.midX, y: background.midY, width: 126, height: 126)
         let items = [window(screen, pid: 5, layer: 20), window(cursor, pid: 4), window(background, pid: 3)]

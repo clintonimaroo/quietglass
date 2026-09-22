@@ -5,8 +5,10 @@ import SwiftUI
 
 struct BlurStrengthControl: View {
     @Binding var strength: Double
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let accent: Color
     private static let previewImage = Bundle.main.url(forResource: "BlurPreview", withExtension: "png").flatMap { NSImage(contentsOf: $0) }
+    private static let previewVideo = Bundle.main.url(forResource: "BlurPreview", withExtension: "mp4")
 
     var body: some View {
         HStack(alignment: .top, spacing: 24) {
@@ -38,9 +40,6 @@ struct BlurStrengthControl: View {
     private var preview: some View {
         ZStack(alignment: .top) {
             sampleScene
-                .blur(radius: strength / 6)
-                .padding(-16)
-                .clipped()
                 .accessibilityHidden(true)
             glassControls
                 .padding(14)
@@ -54,7 +53,18 @@ struct BlurStrengthControl: View {
         .accessibilityValue("Blur strength \(Int(strength))")
     }
 
-    private var sampleScene: some View {
+    @ViewBuilder private var sampleScene: some View {
+        if !reduceMotion, let url = Self.previewVideo {
+            BlurPreviewVideo(url: url, strength: strength)
+        } else {
+            stillScene
+                .blur(radius: strength / 6)
+                .padding(-16)
+                .clipped()
+        }
+    }
+
+    private var stillScene: some View {
         GeometryReader { geometry in
             if let image = Self.previewImage {
                 Image(nsImage: image)

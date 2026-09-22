@@ -125,4 +125,29 @@ final class NotchDockingTests: XCTestCase {
             }
         }
     }
+
+    func testFullscreenDockHelperDoesNotMoveWarningAwayFromSideHandle() {
+        for display in [screen, CGRect(x: -1920, y: 130, width: 1920, height: 1080)] {
+            let visible = CGRect(x: display.minX, y: display.minY, width: display.width, height: display.height - 33)
+            let bottom = NotchDocking.visibleDockTop(in: display, visibleFrame: visible, dockFrames: [display])
+            XCTAssertEqual(bottom, display.minY, "The Dock's transparent display-sized helper is not the visible Dock")
+            for edge in [NotchEdge.left, .right] {
+                let anchor = NotchDocking.anchor(for: edge, in: display, bottom: bottom)
+                let bounds = NotchDocking.popupBounds(in: visible, bottom: bottom)
+                let notice = NotchDocking.noticeFrame(size: CGSize(width: 312, height: 56), anchor: anchor, edge: edge, in: bounds)
+                XCTAssertEqual(notice.midY, anchor.y)
+                XCTAssertTrue(visible.contains(notice))
+            }
+        }
+    }
+
+    func testVisibleDockStillReservesSpaceBesideFullscreenHelper() {
+        let dock = CGRect(x: 300, y: 0, width: 900, height: 96)
+        XCTAssertEqual(NotchDocking.visibleDockTop(in: screen, visibleFrame: screen, dockFrames: [screen, dock]), 96)
+        let desktop = CGRect(x: 0, y: 98, width: 1512, height: 851)
+        XCTAssertEqual(NotchDocking.visibleDockTop(in: screen, visibleFrame: desktop, dockFrames: [screen, dock]), 98)
+        XCTAssertEqual(NotchDocking.visibleDockTop(in: screen, visibleFrame: desktop, dockFrames: []), 0)
+        let sideDock = CGRect(x: 0, y: 0, width: 96, height: 800)
+        XCTAssertEqual(NotchDocking.visibleDockTop(in: screen, visibleFrame: screen, dockFrames: [sideDock]), 0)
+    }
 }

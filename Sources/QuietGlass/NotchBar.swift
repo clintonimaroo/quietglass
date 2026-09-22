@@ -479,27 +479,7 @@ final class NotchBarController: NSObject, NSWindowDelegate, NSPopoverDelegate {
     }
 
     private func visibleDockTop(on screen: NSScreen) -> CGFloat {
-        let edge = screen.frame.minY
-        guard let dock = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first,
-              let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]],
-              let desktopTop = NSScreen.screens.first?.frame.maxY else {
-            return screen.visibleFrame.minY
-        }
-        var top = edge
-        for window in windows {
-            guard (window[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == dock.processIdentifier,
-                  (window[kCGWindowLayer as String] as? NSNumber)?.intValue == Int(CGWindowLevelForKey(.dockWindow)),
-                  let dictionary = window[kCGWindowBounds as String] as? NSDictionary,
-                  let bounds = CGRect(dictionaryRepresentation: dictionary) else { continue }
-            let frame = NSRect(x: bounds.minX, y: desktopTop - bounds.maxY, width: bounds.width, height: bounds.height)
-            let overlap = frame.intersection(screen.frame)
-            guard !overlap.isNull, overlap.height > 4, overlap.width > overlap.height,
-                  overlap.minY <= edge + 2 else { continue }
-            top = max(top, overlap.maxY)
-        }
-        guard top > edge else { return edge }
-        let inset = screen.visibleFrame.minY
-        return inset > edge + 4 ? inset : top
+        DockGeometry.visibleTop(on: screen)
     }
 
     private func popupBounds() -> NSRect {
@@ -707,7 +687,7 @@ private struct NotchBarView: View {
         return Button { action(item) } label: {
             ZStack {
                 Capsule()
-                    .fill(primary && !state.expanded && model.nearbyNeedsAttention ? Color.orange : ControlAppearance.fill)
+                    .fill(primary && !state.expanded && model.nearbyNeedsAttention ? Color.orange : Color.black)
                     .frame(width: primary && !state.expanded ? (vertical ? 8 : 40) : width,
                            height: primary && !state.expanded ? (vertical ? 40 : 8) : height)
                 AppIconView(icon: icon, size: 18)
@@ -802,11 +782,11 @@ private struct NotchControlsView: View {
                     .buttonStyle(QuietGlassButtonStyle()).disabled(!model.canRecenter)
                 Spacer()
                 if model.connected {
-                    Image(systemName: "airpodspro")
+                    Image(systemName: model.trackingSource == .camera ? "camera" : "airpodspro")
                         .font(.system(size: 18, weight: .regular))
                         .symbolRenderingMode(.hierarchical)
                         .foregroundStyle(.white)
-                        .accessibilityLabel("AirPods connected")
+                        .accessibilityLabel(model.trackingSource == .camera ? "Camera tracking" : "AirPods connected")
                 }
             }
 
@@ -914,6 +894,7 @@ private struct NotchControlsView: View {
         if model.status == "Motion permission needed" { return "Allow AirPods motion to start." }
         if !model.screenPermission { return "Allow screen access for the blur effect." }
         if model.previewing { return "Preview clears after five seconds. Click again or press Escape to clear sooner." }
+        if model.trackingSource == .camera { return model.enabled ? model.cameraTracking.message : "Face your screen, then tap Start to calibrate the camera." }
         if !model.enabled { return "Put on your AirPods, then tap Start." }
         if !model.connected { return "Waiting for your AirPods to connect…" }
         if !model.calibrated { return "Face your screen, then tap Recenter." }
