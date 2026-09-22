@@ -1,3 +1,80 @@
+## Public release verification (0.1.1 build 2, September 22)
+
+- The previous GitHub release ZIP was downloaded, its SHA-256 checksum verified, and its packaged Info.plist confirmed as 0.1.0 (build 1). This release is 0.1.1 (build 2), following both published numbers directly. The local development build 22 below was renumbered for publication; no functional source changes were made during packaging.
+- The full suite passed: 155 functional tests, with the optional performance benchmark skipped. Swift release compilation passed for Apple silicon and Intel. Property lists, shell and Python syntax, and whitespace checks passed.
+- The universal DMG and ZIP were packaged and extracted successfully. Both extracted apps pass strict signature, version, architecture, and required-resource checks. SHA-256 checksums and PACKAGE-INFO.json identify version 0.1.1, build 2. The packages contain installation instructions and license notices.
+- These artifacts use the existing local signature and are not Apple-notarized. Hardware and interaction limits from the entries below remain; release notes retain the known Spaces/full-screen transition limitation and do not claim universal camera, Intel hardware, or external-display validation.
+
+## Design refinements (local 0.1.1 build 22, September 22)
+
+- Removed Blur now, Pause 5 min, and Settings from the warning card. The compact 312-by-56-point notice retains its orange outline, title, and countdown; clicking the card opens Nearby people settings, where the actions remain available. Warning positioning now uses the handle anchor, avoiding the offset from expanded controls. A regression test covers the docking edges and offset display bounds.
+- Reduced both the Protection status and App rules footer gaps to 16 points. The long Nearby people limitations paragraph uses 11-point secondary text. Live inspection of the installed build verified both footer gaps.
+- Simplified Test my protection to a 440-point sheet with a small camera-coverage illustration, a single camera action, and a flat response-preview row. Coverage progress appears only while the camera is running. The existing camera and response-check lifecycle remains in place.
+- Replaced the dark code screenshot with a locally rendered, fictional light notes document. The shared preview still responds to blur strength. Its source image and the installed preview at strength 10 were visually checked; the user's blur setting was preserved. The rendering source is `scripts/render-preview.swift`.
+- All 13 targeted NotchDocking and ProtectionCheck tests pass. Apple silicon and Intel release builds and strict signatures pass. Build 22 is installed with the existing signing requirement. The final camera-sheet and small-text visual checks were interrupted when the Mac locked; no new physical camera or multi-display result is claimed.
+- Changes remain local. Nothing was committed, pushed, or published.
+
+## Everyday protection improvements (0.1.1 build 16, September 22)
+
+- Added Blur now, Pause 5 min, and Resume to the notch notice. Timed pauses preserve the monitoring preference across relaunch, show the remaining time, and use both wall and monotonic deadlines while running so a backward clock adjustment cannot extend them. Escape cancels automatic resumption. Tests cover pause/resume, persistence, clock changes, and immediate blur without changing the saved warning response.
+- Added a remembered camera selector and Test my protection. The check offers a live preview with face bounds, centered/left/right coverage observations, and a short warning/blur demonstration with automatic clearing. It pauses production camera monitoring while the check runs and restores it when the sheet closes. Tests exercise stale frames, camera failure, coverage observations, demo timing, cancellation, and cleanup; they do not establish physical camera coverage or recognition accuracy.
+- Previously verified owners can recover from a brief loss of landmarks on a continuously tracked face by facing the camera again. Protection remains active until fresh matching samples are steady. Mismatches, missing faces, expired recovery, and stale frames still require verification. Matching thresholds are unchanged; regression tests cover recovery and rejection cases.
+- App rules can automatically cover an app's windows. Selected areas can be remembered for windows with the same app and exact title, using normalized coordinates and a title digest rather than storing the raw title. Tests cover old-rule decoding, matching and nonmatching titles, moved/resized windows, foreground occlusion, and displays with negative origins.
+- Requested coverage now shows an opaque fallback before the first capture arrives, including newly attached displays. Zero-coverage displays remain hidden on refresh. Automated surface tests pass. The earlier Focus cursor-decoration correction is retained; physical Space swipes and full-screen transitions still need validation and are not claimed to be fixed by these checks.
+- Added optional launch at login, manual update checks, and optional daily background update checks. Checks use public GitHub release metadata and offer a verified repository download page. Installation remains manual. Tests cover version comparisons, untrusted release origins, missing releases, and offline failures. Login-item approval and a real sign-in cycle have not been tested in this pass.
+- Avoided blur rendering when a warm capture has no coverage to draw, and skip OCR when every visible pixel of the frame is unchanged. Changed-pixel regression tests pass. A release-mode profiling run on an Apple M4 with macOS 27.0 measured median processing time over seven warmed runs using bundled fixtures:
+
+  | Stage | Median time |
+  | --- | ---: |
+  | Face detection | 2.86 ms |
+  | Owner landmarks | 4.70 ms |
+  | Owner embedding | 5.33 ms |
+  | Screen blur | 4.12 ms |
+  | Text recognition | 92.64 ms |
+  | Unchanged-frame check | 2.03 ms |
+
+  These are component processing measurements, not battery-life results, total capture costs, or detection-accuracy measurements.
+- All 154 functional tests pass. The opt-in performance test passes separately; it is skipped in the normal 155-case test run. Apple silicon and Intel release compilation passes. Build 16 is installed with the existing signing requirement. DMG and ZIP extraction, strict signatures, and SHA-256 checks pass. The camera selector and action buttons share the borderless gray control appearance.
+- Final live interaction checks are pending because the Mac was locked during this pass. The new preview, notch actions, actual warning-to-blur response, external cameras, multiple monitors, login behavior, and physical Space swipes need an unlocked hardware check. The package remains locally signed; Developer ID signing, notarization, and automatic installation are not configured. No source or package was committed, pushed, or published.
+
+## Focus overlay and button consistency (0.1.1 build 13, September 22)
+
+- Traced the square of wallpaper over Settings to a transparent cursor-helper window. Its live 126-by-126-point bounds at (693, 396) matched the reported square, despite Window Server reporting alpha 1. Window geometry now ignores the known cursor decoration services along with the existing Dock exclusion. Other application windows, including utility windows, still occlude Settings normally.
+- Added regression coverage for cursor decorations over Settings, real utility-window occlusion, and decorations over protected content. The cursor cases failed before the fix; all 133 tests now pass. A live Focus check showed Settings clear while both cursor-helper windows were still present in the on-screen window list. This verifies the reported patch, not every display or Space-transition configuration.
+- Filled action buttons now share the duration control's opaque #323232 gray, with no border stroke. Live checks covered window/area controls, Edit phrases, saved-face controls, protection controls, app-rule controls, Start tracking, and Recalibrate. The existing card borders and toggle accents remain.
+- Replaced the app-rule three-dot menu with the same lifting-lid trash control and inline pink confirmation/cancel actions. Opening and cancelling the Activity Monitor rule's confirmation was verified live; the rule remained Stronger and no real rule or saved face was deleted.
+- Universal release build 13 is installed with the existing signing requirement. DMG and ZIP extraction, strict signatures, and SHA-256 checks pass. Build and package output is local; nothing was committed or pushed to GitHub.
+
+## Timed warnings and Nearby people controls (0.1.1 build 10, September 22)
+
+- Warn me starts a two-minute countdown while attention remains unresolved, then applies blur. The delay is remembered and adjustable from one minute to 24 hours. Resolving the warning or stopping monitoring cancels it; repeated samples and hover do not restart it. Once escalated, increasing the delay does not clear protection. The timer also runs when camera frames stop arriving.
+- Owner notice labels wait for a stable sample before changing, reducing flicker between matching, unmatched, unreadable, and missing faces. Protection decisions still use each fresh sample without this label delay.
+- Added a native hour/minute duration editor and a matching gray camera-response selector, both 34 points high with the same corner radius. Saved-face deletion uses a lifting trash lid and inline confirm/cancel controls, with a pink confirmation tick and an eight-point gap from Set up again. Actual deletion still requires authentication; success feedback follows the Keychain result.
+- All 130 tests pass, including countdown boundaries and cancellation, changed delay, an actual timer callback, camera failure and retry, owner verification, stable notice labels, and authenticated deletion/cancellation. Universal release builds pass. Build 10 is installed with the existing signing requirement; DMG and ZIP extraction, strict signatures, and SHA-256 checks pass.
+- Live UI checks verified the matching gray controls, both camera-response menu choices, the duration editor saving two minutes and retaining it after relaunch, the tighter button spacing, the pink inline confirmation, and cancellation preserving the saved face. No real face data was deleted for these checks. A physical two-minute warning-to-blur trial has not been recorded in this pass.
+- Changes and packages remain local. Nothing was committed or pushed to GitHub.
+
+## Simpler owner recognition (0.1.1 build 4, September 21)
+
+- Removed deliberate eye closing and reopening from enrollment and ongoing owner verification. Both now use look at the camera, a small turn in the requested direction, then look back. Updated the three-part progress indicator and instructions. Saved templates, matching thresholds, authentication, and explicit Save/Delete actions are unchanged.
+- All 117 tests pass. The shortened sequence completes with actual Vision/model fixture samples for both directions. Regression checks cover natural blinks during the return, wrong turns, static poses, missing/stale frames, replacement faces, and authenticated template storage. The new completion checks failed against the previous five-stage flow before the fix.
+- Apple silicon and Intel release builds pass. DMG and ZIP extraction, strict signatures, and checksums pass. Build 4 is installed with the existing signing requirement. The live setup sheet shows the new camera prompt and “A small head turn is enough. Blink naturally.” Physical completion of this revised sequence has not yet been confirmed by the user.
+- Changes and packages remain local; nothing was committed or pushed to GitHub.
+
+## Notch warning sound (0.1.1 build 3, September 21)
+
+- Added the exact 0.6-second Bendy fold sound requested by the user, played at 50% volume once per visible warning. Repeated camera/layout updates, hover, and ongoing verification prompts do not replay it. Hidden notices wait until visible; a resolved warning rearms the next one.
+- Added a default-on Play warning sound preference, remembered across launches. All 117 tests pass, including warning deduplication, deferred visibility, mute/re-enable behavior, preference persistence, and decoding the bundled MP3 without audio playback.
+- Universal release builds and both package extraction checks pass. The sound bytes and attribution are checked by the packager. Installed build 3 with the existing signing requirement, reopened the app, and verified Play warning sound is on in Nearby people settings. Actual audible output from a newly detected second face has not been checked in this pass.
+
+## 0.1.1 release packaging (September 21)
+
+- All 112 automated tests pass. Coverage includes the camera preference lifecycle, both turn directions, temporary landmark loss, Focus occlusion, template storage, permissions, and packaged-model loading.
+- Apple silicon and Intel release builds pass. Both architectures are packaged in the DMG and ZIP; the compiled recognition model, icons, licenses, and offline help are included. Strict signature checks pass after extraction from each format.
+- Removed experimental labels from the app and current guides while retaining accurate descriptions of camera visibility, recognition limits, and screen locking. Added About, offline Help, Downloads & Updates, and issue-reporting menu actions.
+- The user has confirmed two-person detection and the enrollment right-turn fix in earlier builds. This packaging pass does not establish recognition accuracy, spoof resistance, every macOS/display configuration, or Intel hardware execution. The last monitoring-turn and Focus corrections have automated regression coverage; another live hardware check has not been recorded.
+- Distribution uses the existing local signing identity. Developer ID signing and Apple notarization are deferred until the developer membership is renewed. The installer includes Apple's Open Anyway instructions and a support contact that does not require repository access.
+
 ## Nearby people responses and preview update (builds 61–62, September 21)
 
 - Added Warn me and Blur automatically responses. Warning mode never requests Nearby people's display capture or coverage, and shows attention beside the visible collapsed notch; expanded controls turn amber. The saved response does not enable the camera on launch. Escape and sleep stop monitoring. Added a direct link from the alert to Nearby people settings.

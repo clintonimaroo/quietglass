@@ -38,7 +38,7 @@ public struct OwnerTemplate: Codable, Equatable {
     public func matches(_ vector: [Float]) -> Bool {
         guard isValid else { return false }
         // Deliberately stricter than SFace's LFW example threshold (0.363).
-        // This is an experimental operating point, NOT a calibrated probability.
+        // This similarity threshold is an operating point, not a calibrated probability.
         let scores = vectors.map { Self.similarity($0, vector) }.sorted()
         return scores[scores.count / 2] >= 0.50 && scores[0] >= 0.35
     }
@@ -59,7 +59,7 @@ public struct OwnerPose: Equatable {
 /// A modest still-photo obstacle. RGB landmarks do not provide depth or reliable
 /// presentation-attack detection; a video/deepfake may reproduce this sequence.
 public struct OwnerChallenge {
-    public enum Stage: Equatable { case center, turn, returnToCenter, closeEyes, openEyes, complete }
+    public enum Stage: Equatable { case center, turn, returnToCenter, complete }
     public private(set) var stage: Stage = .center
     public let turnPositive: Bool
     private var heldSince: TimeInterval?
@@ -73,8 +73,6 @@ public struct OwnerChallenge {
         case .center: return "Look at the camera"
         case .turn: return turnPositive ? "Turn slightly to your left" : "Turn slightly to your right"
         case .returnToCenter: return "Look at the camera again"
-        case .closeEyes: return "Close both eyes briefly"
-        case .openEyes: return "Open your eyes"
         case .complete: return "Owner verified"
         }
     }
@@ -92,10 +90,8 @@ public struct OwnerChallenge {
         switch stage {
         case .center, .returnToCenter: accepted = centered && eyesOpen
         // Eye landmarks change shape in profile. Validate head motion here;
-        // the following centered stages separately require open/closed/open eyes.
+        // looking back at the camera finishes the sequence. No forced blink.
         case .turn: accepted = (turnPositive ? pose.yaw : -pose.yaw) >= 0.22 && abs(pose.yaw) <= 1.05
-        case .closeEyes: accepted = centered && pose.widestEye < openEyes * 0.50
-        case .openEyes: accepted = centered && eyesOpen
         case .complete: return true
         }
         guard accepted else { heldSince = nil; return false }
@@ -104,9 +100,7 @@ public struct OwnerChallenge {
             switch stage {
             case .center: stage = .turn
             case .turn: stage = .returnToCenter
-            case .returnToCenter: stage = .closeEyes
-            case .closeEyes: stage = .openEyes
-            case .openEyes: stage = .complete
+            case .returnToCenter: stage = .complete
             case .complete: break
             }
             heldSince = nil
@@ -132,32 +126,63 @@ public struct OwnerPresence {
     private var lastSample: TimeInterval?
 
     public init(turnPositive: Bool) { challenge = OwnerChallenge(turnPositive: turnPositive) }
+    private var recoveryUntil: TimeInterval?
+    private var recoverySince: TimeInterval?
+    public var recoveringLandmarks: Bool { recoveryUntil != nil }
 
     public mutating func interrupt(turnPositive: Bool) {
         self = OwnerPresence(turnPositive: turnPositive)
     }
 
-    @discardableResult public mutating func observe(matches: Bool, pose: OwnerPose?, openEyes: Double, at time: TimeInterval) -> Bool {
+    @discardableResult public mutating func observe(matches: Bool, pose: OwnerPose?, openEyes: Double, at time: TimeInterval,
+                                                  continuousFaceWithMissingLandmarks: Bool = false) -> Bool {
         guard time.isFinite else { return covered }
         if let lastSample, time <= lastSample { return covered }
         if let lastSample, time - lastSample > 0.6 {
             covered = true
             challenge.reset()
             missingSince = nil
+            recoveryUntil = nil; recoverySince = nil
         }
         lastSample = time
         guard matches, let pose, pose.isValid else {
+            if continuousFaceWithMissingLandmarks {
+                if !covered && recoveryUntil == nil { recoveryUntil = time + 1.5 }
+                if let until = recoveryUntil, time > until { recoveryUntil = nil }
+            } else { recoveryUntil = nil }
+            recoverySince = nil
             // A dropped landmark or brief mismatch must not count as a held
             // pose. Restart the sequence only after sustained loss, using the
             // same short grace period as the existing cover decision.
             challenge.pause()
             if missingSince == nil { missingSince = time }
-            if time - (missingSince ?? time) >= 0.35 { covered = true; challenge.reset() }
+            if time - (missingSince ?? time) >= 0.35 {
+                covered = true
+                if recoveryUntil == nil { challenge.reset() }
+            }
             return covered
         }
         missingSince = nil
+        if let until = recoveryUntil {
+            if time > until { recoveryUntil = nil; recoverySince = nil; challenge.reset(); covered = true }
+            else if covered {
+                if recoverySince == nil { recoverySince = time }
+                if time - (recoverySince ?? time) >= 0.4 {
+                    covered = false; recoveryUntil = nil; recoverySince = nil
+                }
+                return covered
+            } else { recoveryUntil = nil; recoverySince = nil }
+        }
         if covered && challenge.observe(pose, openEyes: openEyes, at: time) { covered = false }
         return covered
+    }
+
+    public static func isContinuousFace(_ previous: CGRect?, _ current: CGRect?) -> Bool {
+        guard let previous, let current, !previous.isEmpty, !current.isEmpty else { return false }
+        let intersection = previous.intersection(current)
+        let overlap = max(0, intersection.width) * max(0, intersection.height)
+        let union = previous.width * previous.height + current.width * current.height - overlap
+        return union > 0 && overlap / union >= 0.6
     }
 }
 
@@ -172,15 +197,13 @@ public struct OwnerEnrollment {
         let result = OwnerTemplate(vectors: vectors, openEyes: eyeSamples.sorted()[eyeSamples.count / 2])
         return result.isValid ? result : nil
     }
-    public var prompt: String { vectors.count < 5 ? "Look at the camera with your eyes open" : challenge.prompt }
+    public var prompt: String { vectors.count < 5 ? "Look at the camera" : challenge.prompt }
     public var progress: Double {
         if vectors.count < 5 { return Double(vectors.count) * 0.04 }
         switch challenge.stage {
         case .center: return 0.2
-        case .turn: return 0.35
-        case .returnToCenter: return 0.5
-        case .closeEyes: return 0.65
-        case .openEyes: return 0.8
+        case .turn: return 1.0 / 3
+        case .returnToCenter: return 2.0 / 3
         case .complete: return 1
         }
     }

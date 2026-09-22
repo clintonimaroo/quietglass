@@ -15,7 +15,7 @@ final class PrivacySurfaceTests: XCTestCase {
         XCTAssertEqual(layer.mask?.frame.size, screen.frame.size)
     }
 
-    @MainActor func testFullScreenBlurAndPeekUseCapturedPixelsWithoutOpaqueLayers() throws {
+    @MainActor func testFullScreenCoversUntilFirstFrameThenUsesCapturedPixelsAndAllowsPeek() throws {
         _ = NSApplication.shared
         let surface = PrivacySurface(screen: try XCTUnwrap(NSScreen.screens.first))
         defer { surface.panel.close() }
@@ -25,7 +25,7 @@ final class PrivacySurfaceTests: XCTestCase {
         XCTAssertFalse(surface.panel.hidesOnDeactivate)
         surface.resize(to: CGRect(x: 0, y: 0, width: 4, height: 4))
         surface.update(windows: [], sensitive: [], fullScreen: true)
-        XCTAssertFalse(surface.panel.isVisible)
+        XCTAssertTrue(surface.panel.isVisible, "New displays must stay covered while their first frame loads")
         XCTAssertFalse(surface.hasImage)
         let context = try XCTUnwrap(CGContext(data: nil, width: 4, height: 4, bitsPerComponent: 8,
                                              bytesPerRow: 16, space: CGColorSpaceCreateDeviceRGB(),
@@ -57,7 +57,7 @@ final class PrivacySurfaceTests: XCTestCase {
         let layers = try XCTUnwrap(surface.panel.contentView?.layer?.sublayers)
         let mask = try XCTUnwrap(layers[0].mask as? CAShapeLayer)
         XCTAssertEqual(mask.path?.boundingBox, CGRect(x: 0, y: 0, width: 4, height: 4))
-        XCTAssertNil(layers[0].backgroundColor)
+        XCTAssertNotNil(layers[0].backgroundColor, "Selected regions have temporary coverage before capture is ready")
         surface.update(windows: [], sensitive: [], fullScreen: false)
         XCTAssertFalse(surface.panel.isVisible)
     }

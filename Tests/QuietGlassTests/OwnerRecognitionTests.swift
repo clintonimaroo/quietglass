@@ -70,10 +70,13 @@ private final class OwnerTestCamera: NearbyCameraSession {
         XCTFail("Asynchronous operation did not settle")
     }
     func settle() async { for _ in 0..<20 { await Task.yield() } }
-    func send(pose: OwnerPose = OwnerPose(yaw: 0, eyes: 0.3), count: Int = 1, matches: Bool = true, advance: Double = 0.11) async {
+    func send(pose: OwnerPose = OwnerPose(yaw: 0, eyes: 0.3), count: Int = 1, matches: Bool = true,
+              featuresAvailable: Bool = true, advance: Double = 0.11) async {
         now += advance
         let value = matches ? vector : [0, 1] + Array(repeating: Float(0), count: 126)
-        cameras.last!.completion(.success(NearbyFaceSample(count: count, capturedAt: now, vector: value, pose: pose)))
+        cameras.last!.completion(.success(NearbyFaceSample(count: count, capturedAt: now,
+                                                          vector: featuresAvailable ? value : nil,
+                                                          pose: featuresAvailable ? pose : nil)))
         await settle()
     }
     func start() async {
@@ -84,8 +87,7 @@ private final class OwnerTestCamera: NearbyCameraSession {
         for _ in 0..<6 { await send(advance: 0.27) }
         let prompt = enrollment ? owner.prompt : nearby.ownerPrompt
         let yaw: Double = prompt.contains("left") ? 0.3 : -0.3
-        for pose in [OwnerPose(yaw: yaw, eyes: 0.3), OwnerPose(yaw: 0, eyes: 0.3),
-                     OwnerPose(yaw: 0, eyes: 0.05), OwnerPose(yaw: 0, eyes: 0.3)] {
+        for pose in [OwnerPose(yaw: yaw, eyes: 0.3), OwnerPose(yaw: 0, eyes: 0.3)] {
             for _ in 0..<5 { await send(pose: pose) }
         }
     }
@@ -202,9 +204,82 @@ final class OwnerRecognitionTests: XCTestCase {
         await h.start()
         XCTAssertTrue(h.nearby.alertActive)
         XCTAssertFalse(h.nearby.covered)
+        XCTAssertEqual(h.nearby.noticeDetail, "Blurs in 2:00 · Esc to stop")
         await h.passChallenge()
         XCTAssertFalse(h.nearby.alertActive)
+        XCTAssertNil(h.nearby.warningSecondsRemaining)
         XCTAssertFalse(requestedCapture)
+    }
+
+    @MainActor func testBriefUnreadableFramesDoNotReplaceTheTurnInstruction() async {
+        let h = OwnerRig(); defer { h.finish() }
+        await h.start()
+        for _ in 0..<6 { await h.send() }
+        let instruction = h.nearby.ownerPrompt
+        XCTAssertTrue(instruction.contains("Turn slightly"))
+        XCTAssertEqual(h.nearby.noticeTitle, instruction)
+        for _ in 0..<6 {
+            await h.send(featuresAvailable: false)
+            XCTAssertEqual(h.nearby.noticeTitle, instruction, "One unreadable frame must not flash Owner not verified")
+            XCTAssertEqual(h.nearby.message, instruction)
+            await h.send()
+        }
+        XCTAssertTrue(h.nearby.covered, "Stabilizing the label must not bypass verification")
+        await h.passChallenge()
+        XCTAssertFalse(h.nearby.covered)
+    }
+
+    @MainActor func testOwnerNoticeExplainsAdditionalMissingUnreadableAndUnmatchedFaces() async {
+        let h = OwnerRig(); defer { h.finish() }
+        await h.start()
+        for _ in 0..<6 { await h.send(count: 2) }
+        XCTAssertEqual(h.nearby.noticeTitle, "Additional face detected")
+        XCTAssertTrue(h.nearby.covered)
+        for _ in 0..<6 { await h.send(count: 0) }
+        XCTAssertEqual(h.nearby.noticeTitle, "No face in view")
+        for _ in 0..<6 { await h.send(featuresAvailable: false) }
+        XCTAssertEqual(h.nearby.noticeTitle, "Face the camera in good light")
+        for _ in 0..<6 { await h.send(matches: false) }
+        XCTAssertEqual(h.nearby.noticeTitle, "Owner not verified")
+        XCTAssertTrue(h.nearby.covered)
+        h.nearby.setResponse(.warning)
+        XCTAssertFalse(h.nearby.covered)
+        XCTAssertTrue(h.nearby.alertActive)
+        XCTAssertEqual(h.nearby.noticeDetail, "Blurs in 2:00 · Esc to stop")
+        h.nearby.setResponse(.blur)
+        XCTAssertTrue(h.nearby.covered)
+        XCTAssertEqual(h.nearby.noticeDetail, "Blur stays on · Esc to stop")
+    }
+
+    @MainActor func testNoticeStabilityCannotHideSustainedMismatchAfterVerification() async {
+        let h = OwnerRig(); defer { h.finish() }
+        await h.start(); await h.passChallenge()
+        XCTAssertFalse(h.nearby.covered)
+        await h.send(featuresAvailable: false)
+        await h.send()
+        XCTAssertFalse(h.nearby.alertActive, "A single missing landmark frame has not lost the owner")
+        for _ in 0..<6 { await h.send(matches: false) }
+        XCTAssertTrue(h.nearby.covered)
+        XCTAssertTrue(h.nearby.alertActive)
+        XCTAssertEqual(h.nearby.noticeTitle, "Owner not verified")
+        await h.send()
+        XCTAssertEqual(h.nearby.noticeTitle, "Owner not verified", "One matching frame must not swap the notice or clear protection")
+        XCTAssertTrue(h.nearby.covered)
+    }
+
+    @MainActor func testOwnerWarningExpiresButStillRequiresTheOwnerToClearBlur() async {
+        let h = OwnerRig(); defer { h.finish() }
+        h.nearby.setResponse(.warning)
+        await h.start()
+        h.now += 121
+        h.nearby.checkWarningDeadline()
+        XCTAssertTrue(h.nearby.covered)
+        XCTAssertTrue(h.nearby.requiresBlur)
+        for _ in 0..<6 { await h.send(matches: false) }
+        XCTAssertTrue(h.nearby.covered)
+        await h.passChallenge()
+        XCTAssertFalse(h.nearby.covered)
+        XCTAssertNil(h.nearby.warningSecondsRemaining)
     }
 
     @MainActor func testEnrollmentDoesNotSaveUntilConfirmedAndDeletesAfterAuthentication() async {

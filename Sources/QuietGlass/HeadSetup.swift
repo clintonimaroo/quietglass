@@ -131,7 +131,7 @@ private struct HeadSetupView: View {
                 .contentTransition(.opacity)
             Spacer(minLength: 16)
             Button(primaryLabel, action: advance)
-                .buttonStyle(HeadSetupButtonStyle(primary: true))
+                .buttonStyle(HeadSetupButtonStyle())
                 .disabled(!canAdvance)
                 .keyboardShortcut(.defaultAction)
             Text("AirPods motion · On your Mac · No camera")
@@ -505,19 +505,16 @@ private struct HeadOutline: Shape {
 }
 
 private struct HeadSetupButtonStyle: ButtonStyle {
-    let primary: Bool
     @State private var hovering = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.isEnabled) private var isEnabled
-    private let pink = Color(red: 0.94, green: 0.68, blue: 0.91)
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 13, weight: .medium))
             .frame(maxWidth: .infinity, minHeight: 44)
-            .foregroundStyle(primary && isEnabled ? Color.black : Color.white.opacity(isEnabled ? 0.8 : 0.4))
-            .background(primary && isEnabled ? pink : Color(white: 0.14), in: Capsule())
-            .overlay(Capsule().strokeBorder(.white.opacity(primary && isEnabled ? 0 : 0.07)))
+            .foregroundStyle(Color.white.opacity(isEnabled ? 0.88 : 0.4))
+            .background(ControlAppearance.fill, in: Capsule())
             .brightness(hovering && isEnabled ? 0.035 : 0)
             .scaleEffect(configuration.isPressed && !reduceMotion ? 0.985 : 1)
             .opacity(configuration.isPressed ? 0.85 : 1)

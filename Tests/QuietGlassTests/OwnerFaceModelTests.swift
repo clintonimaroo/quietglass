@@ -38,7 +38,7 @@ final class OwnerFaceModelTests: XCTestCase {
         }
     }
 
-    func testActualVisionAndModelSamplesAdvanceBothEnrollmentTurns() throws {
+    func testActualVisionAndModelSamplesCompleteEnrollmentWithoutClosingEyes() throws {
         let model = try OwnerFaceModel()
         func sample(_ name: String) throws -> (vector: [Float], pose: OwnerPose) {
             let buffer = try fixtureBuffer(name)
@@ -70,8 +70,9 @@ final class OwnerFaceModelTests: XCTestCase {
                 enrollment.observe(vector: center.vector, pose: center.pose, faceCount: 1, at: time)
                 time += 0.1
             }
-            XCTAssertEqual(enrollment.challenge.stage, .closeEyes, name)
-            XCTAssertNil(enrollment.template, "A matching turn is not enough to save a face")
+            XCTAssertEqual(enrollment.challenge.stage, .complete, name)
+            XCTAssertTrue(enrollment.template?.isValid == true, "A matching turn and look back should finish enrollment")
+            XCTAssertEqual(enrollment.progress, 1)
         }
     }
 

@@ -14,6 +14,7 @@ final class ShieldSurface {
     let panel: ShieldPanel
     private let imageLayer = CALayer()
     private let gradient = CAGradientLayer()
+    private var requestedCoverage = 0.0
     var hasImage: Bool { imageLayer.contents != nil }
 
     init(screen: NSScreen, includeInCaptures: Bool = false) {
@@ -39,24 +40,25 @@ final class ShieldSurface {
     }
 
     func resize(to frame: NSRect) {
-        guard panel.frame != frame else { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        panel.setFrame(frame, display: true)
+        if panel.frame != frame { panel.setFrame(frame, display: true) }
         imageLayer.frame = NSRect(origin: .zero, size: frame.size)
         gradient.frame = imageLayer.bounds
         CATransaction.commit()
     }
 
     func keepVisible() {
-        guard hasImage else { return }
+        guard requestedCoverage > 0, hasImage || imageLayer.backgroundColor != nil else { return }
         panel.orderFrontRegardless()
     }
 
     func update(coverage: Double, direction: ShieldDirection) {
-        guard hasImage else { return }
+        requestedCoverage = coverage
+        guard coverage > 0 else { panel.orderOut(nil); return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
+        imageLayer.backgroundColor = hasImage ? nil : DisplayCapture.background
         gradient.frame = imageLayer.bounds
         switch direction {
         case .left: gradient.startPoint = CGPoint(x: 0, y: 0.5); gradient.endPoint = CGPoint(x: 1, y: 0.5)
@@ -76,12 +78,15 @@ final class ShieldSurface {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         imageLayer.contents = image
+        imageLayer.backgroundColor = nil
         CATransaction.commit()
     }
 
     func clear() {
+        requestedCoverage = 0
         panel.orderOut(nil)
         imageLayer.contents = nil
+        imageLayer.backgroundColor = nil
     }
 }
 
@@ -140,7 +145,7 @@ final class ShieldOverlay {
             }
             RunLoop.main.add(refreshTimer!, forMode: .common)
         }
-        if surfaces.values.contains(where: \.hasImage) { startAnimation() }
+        startAnimation()
     }
 
     func fadeOut() {

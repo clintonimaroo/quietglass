@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>QuietGlass Help</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 16px/1.65 -apple-system, BlinkMacSystemFont, sans-serif; max-width: 760px; margin: 60px auto; padding: 0 24px; }
+  h1 { font-size: 40px; letter-spacing: -1.3px; margin-bottom: 0; }
+  h2 { font-size: 23px; margin-top: 40px; }
+  a { color: light-dark(#8a287e, #efade8); }
+  .intro { font-size: 20px; opacity: .75; margin-top: 4px; }
+  li { margin: 10px 0; }
+  kbd { font: inherit; font-size: .9em; padding: 2px 6px; border: 1px solid #8886; border-radius: 5px; white-space: nowrap; }
+  footer { border-top: 1px solid #8885; padding-top: 24px; margin-top: 48px; opacity: .8; }
+</style>
+<h1>QuietGlass</h1>
+<p class="intro">Privacy for what’s on your Mac.</p>
+<p>QuietGlass lives in your menu bar. Open Settings from its menu bar icon, or hover over the floating control bar to reveal its controls. Closing Settings keeps protection running.</p>
+<h2>Start with one feature</h2>
+<ul>
+  <li><strong>Instant privacy.</strong> Press <kbd>⌃⌥⌘P</kbd> to blur every display. Press it again to clear, or hold <kbd>⌃⌥⌘Space</kbd> to peek.</li>
+  <li><strong>Look-away protection.</strong> Connect compatible AirPods, select <strong>Start tracking</strong>, and follow calibration while sitting in your normal working position.</li>
+  <li><strong>Window or area protection.</strong> Use the app you want to protect, then open <strong>Settings → Protection</strong> and choose <strong>Protect active window</strong> or <strong>Choose area…</strong>.</li>
+  <li><strong>Focus mode.</strong> Choose the <strong>Focus</strong> profile, then return to your work. The active window stays clear while surrounding content blurs. Select a different profile or press Escape to clear it.</li>
+  <li><strong>Nearby people.</strong> In <strong>Settings → Protection</strong>, enable <strong>Detect additional faces</strong>. <strong>Warn me</strong> shows a warning for 2 minutes, then blurs if it is unresolved. Edit <strong>Blur after</strong> with the pencil and checkmark to save your preferred hours and minutes. Clearing the alert cancels its timer; Escape stops monitoring. <strong>Blur automatically</strong> skips the delay. A short sound plays once when the notch warning appears; turn off <strong>Play warning sound</strong> for silent alerts. AirPods are not required.</li>
+  <li><strong>Recognize me.</strong> Choose <strong>Set up my face</strong>, authenticate, and follow the camera prompts. Save your face, enable detection, and complete the short verification when prompted. To remove your saved template, click the trash button, confirm with the pink checkmark, and authenticate.</li>
+  <li><strong>Check camera coverage.</strong> Choose a camera in Nearby people, click <strong>Run check</strong>, then <strong>Start camera</strong>. Stay centered and ask someone to enter each side of the preview. Faces must be inside the camera’s view. Try your response with a short demonstration; your regular delay is unchanged. Monitoring resumes when you finish.</li>
+  <li><strong>Act on a warning.</strong> Click the notch notice to open Nearby people settings, where you can use <strong>Blur now</strong>, <strong>Pause 5 min</strong>, or <strong>Resume</strong>. A timed pause stops the camera and shows when monitoring will restart. Escape cancels automatic resume.</li>
+  <li><strong>Remember protection.</strong> Enable <strong>Automatically protect windows</strong> in an app rule, or click <strong>Remember</strong> beside a selected area. Saved areas return for the same app and window title and follow its size. Pause protection or Escape clears coverage without deleting saved rules.</li>
+  <li><strong>Everyday use.</strong> General settings include optional <strong>Launch at login</strong> and update checking. <strong>Check for Updates…</strong> checks GitHub for a public release and offers its download page. Quit QuietGlass before replacing it in Applications. Installation is manual.</li>
+</ul>
+<p><kbd>Escape</kbd> clears protection and turns camera monitoring off. Enable detection again when you want it to resume.</p>
+<h2>Permissions</h2>
+<p>Allow <strong>Screen Recording</strong> for blur and local text detection, <strong>Motion &amp; Fitness</strong> for AirPods tracking, and <strong>Camera</strong> for Nearby people or face setup. QuietGlass does not use your microphone. Owner face setup and access require Touch ID or your Mac password.</p>
+<h2>If something needs attention</h2>
+<ul>
+  <li><strong>Blur does not appear:</strong> check QuietGlass in <strong>System Settings → Privacy &amp; Security → Screen Recording</strong> (called Screen &amp; System Audio Recording on some macOS versions). Quit and reopen QuietGlass if macOS requests it.</li>
+  <li><strong>Head tracking feels off:</strong> face your screen and use <strong>Center My Gaze</strong>. Recalibrate after reconnecting AirPods or changing where you sit.</li>
+  <li><strong>Camera is unavailable:</strong> check Camera permission, close another app using that camera if necessary, and choose <strong>Retry</strong> in Nearby people settings.</li>
+  <li><strong>A face prompt does not advance:</strong> sit alone in even light, keep your face visible, and turn your head slightly in the requested direction. Turn with your head, not just your eyes. If needed, cancel and use <strong>Set up again</strong>.</li>
+  <li><strong>Detection is off:</strong> your choice is remembered, including when Escape turns it off. Monitoring pauses while the Mac is asleep or inactive and resumes when you return.</li>
+</ul>
+<h2>Privacy and screen visibility</h2>
+<p>Screen content, recognized text, camera frames, and AirPods motion are processed on your Mac. Photos and video are not saved or uploaded. Optional face recognition stores a template in the encrypted macOS login Keychain.</p>
+<p>Detection covers faces visible to the camera. Poor light, glasses, and an obstructed face can affect recognition; photos or video may fool it. Screen blur does not lock your Mac or make a clear screen visible only to you. Lock your Mac when you leave it unattended.</p>
+<p>To include blur in a recording, enable <strong>Show blur in recordings</strong> and record the entire display. Capturing an individual app window can bypass the overlay. macOS Space and full-screen transitions can briefly interrupt the overlay.</p>
+<h2>Updates and support</h2>
+<p>Choose <strong>Downloads &amp; Updates…</strong> from the QuietGlass menu for new releases. Quit QuietGlass before replacing it in Applications; your settings stay on this Mac. Updates are installed manually.</p>
+<p><a href="https://github.com/clintonimaroo/quietglass/releases/latest">Download the latest version</a> · <a href="https://github.com/clintonimaroo/quietglass/issues">Report an issue</a> · <a href="https://github.com/clintonimaroo/quietglass/blob/main/SECURITY.md">Security reports</a></p>
+<p>If you received QuietGlass directly and cannot access the repository, contact <a href="mailto:hi@clintonimaro.com">hi@clintonimaro.com</a> for help or an updated download. Include your QuietGlass and macOS versions; do not send private screen content or face data.</p>
+<footer>macOS 14 or later · Apple silicon and Intel · Built by Clinton Imaro</footer>
+</html>

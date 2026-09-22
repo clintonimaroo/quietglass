@@ -29,6 +29,7 @@ final class NotchBarController: NSObject, NSWindowDelegate, NSPopoverDelegate {
     private let panel: NotchPanel
     private let hintPanel: HintPanel
     private let nearbyPanel: HintPanel
+    private let nearbySound = NearbyNoticeSound()
     private var nearbyObservation: AnyCancellable?
     private let contextPanel: NotchPanel
     private let menuState = NotchMenuState()
@@ -258,13 +259,18 @@ final class NotchBarController: NSObject, NSWindowDelegate, NSPopoverDelegate {
     }
 
     private func updateNearbyNotice() {
+        defer {
+            nearbySound.update(needsAttention: model.nearby.needsAttention || model.nearbyBlurUnavailable,
+                               visible: nearbyPanel.isVisible,
+                               enabled: model.nearby.warningSoundEnabled)
+        }
         guard model.nearbyNeedsAttention, panel.isVisible, !state.expanded,
               !popover.isShown, !contextMenuOpen, profilePicker?.isVisible != true else {
             nearbyPanel.orderOut(nil)
             return
         }
-        let size = NSSize(width: model.nearby.owner.enabled ? 280 : 236, height: 52)
-        let frame = NotchDocking.popupFrame(size: size, controls: panel.frame, edge: state.edge, in: popupBounds())
+        let size = NearbyNoticeView.size
+        let frame = NotchDocking.noticeFrame(size: size, anchor: anchor, edge: state.edge, in: popupBounds())
         nearbyPanel.setFrame(frame, display: true)
         nearbyPanel.orderFrontRegardless()
     }
@@ -617,6 +623,7 @@ final class NotchBarController: NSObject, NSWindowDelegate, NSPopoverDelegate {
 }
 
 struct NearbyNoticeView: View {
+    static let size = CGSize(width: 312, height: 56)
     @ObservedObject var model: AppModel
 
     var body: some View {
@@ -632,9 +639,14 @@ struct NearbyNoticeView: View {
             }
             .foregroundStyle(.white)
             .padding(.horizontal, 12)
-            .frame(width: model.nearby.owner.enabled ? 280 : 236, height: 52)
-            .background(Color(white: 0.08), in: RoundedRectangle(cornerRadius: 13))
-            .overlay(RoundedRectangle(cornerRadius: 13).strokeBorder(.orange.opacity(0.45), lineWidth: 0.7))
+            .frame(width: Self.size.width, height: Self.size.height)
+            .background(Color(white: 0.09), in: RoundedRectangle(cornerRadius: 13))
+            .overlay {
+                RoundedRectangle(cornerRadius: 13)
+                    .strokeBorder(.orange.opacity(0.45), lineWidth: 0.7)
+                    .allowsHitTesting(false)
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 13))
         }
         .buttonStyle(.plain)
         .accessibilityLabel(model.nearbyNoticeTitle + ". " + model.nearbyNoticeDetail)
@@ -695,12 +707,11 @@ private struct NotchBarView: View {
         return Button { action(item) } label: {
             ZStack {
                 Capsule()
-                    .fill(primary && model.nearbyNeedsAttention ? Color.orange : Color.black.opacity(primary && !state.expanded ? 0.58 : 1))
-                    .overlay(Capsule().strokeBorder(.white.opacity(primary && !state.expanded ? 0.55 : 0.25), lineWidth: 0.8))
+                    .fill(primary && !state.expanded && model.nearbyNeedsAttention ? Color.orange : ControlAppearance.fill)
                     .frame(width: primary && !state.expanded ? (vertical ? 8 : 40) : width,
                            height: primary && !state.expanded ? (vertical ? 40 : 8) : height)
                 AppIconView(icon: icon, size: 18)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(primary && model.nearbyNeedsAttention ? Color.orange : .white)
                     .opacity(state.expanded ? 1 : 0)
                     .scaleEffect(state.expanded ? 1 : 0.7)
             }
@@ -786,9 +797,9 @@ private struct NotchControlsView: View {
 
             HStack(spacing: 8) {
                 Button(model.enabled ? "Pause" : "Start") { model.setEnabled(!model.enabled) }
-                    .buttonStyle(.borderedProminent).tint(.white.opacity(0.18))
+                    .buttonStyle(QuietGlassButtonStyle())
                 Button("Recenter") { model.recenter() }
-                    .buttonStyle(.bordered).disabled(!model.canRecenter)
+                    .buttonStyle(QuietGlassButtonStyle()).disabled(!model.canRecenter)
                 Spacer()
                 if model.connected {
                     Image(systemName: "airpodspro")
@@ -810,11 +821,11 @@ private struct NotchControlsView: View {
                         Button("Screen Settings") { model.requestScreenPermission() }
                         Button(model.restarting ? "Restarting…" : "Restart QuietGlass") { model.restartForScreenPermission() }
                             .disabled(model.restarting)
-                    }.buttonStyle(.bordered).controlSize(.small)
+                    }.buttonStyle(QuietGlassButtonStyle()).controlSize(.small)
                 }
             }
             if model.status == "Motion permission needed" {
-                Button("Open Motion Settings") { model.openMotionSettings() }.buttonStyle(.bordered)
+                Button("Open Motion Settings") { model.openMotionSettings() }.buttonStyle(QuietGlassButtonStyle())
             }
             if let notice = model.captureNotice {
                 Text(notice).font(.system(size: 10)).foregroundStyle(.orange)
@@ -894,6 +905,7 @@ private struct NotchControlsView: View {
         .frame(width: 276)
         .fixedSize(horizontal: false, vertical: true)
         .preferredColorScheme(.dark)
+        .buttonStyle(QuietGlassButtonStyle())
         .tint(Color(red: 0.76, green: 0.74, blue: 0.93))
     }
 

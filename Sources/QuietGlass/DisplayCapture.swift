@@ -18,13 +18,15 @@ final class DisplayCapture: NSObject, SCStreamOutput, SCStreamDelegate {
     private var lastBuffer: CVPixelBuffer?
     private var rendering = false
     private var stopped = false
+    private var renderingEnabled: Bool
 
-    init(id: UUID, filter: SCContentFilter, configuration: SCStreamConfiguration, radius: Double,
+    init(id: UUID, filter: SCContentFilter, configuration: SCStreamConfiguration, radius: Double, renderingEnabled: Bool = true,
          onFrame: @escaping @MainActor (CGImage) -> Void,
          onFailure: @escaping @MainActor (Error) -> Void,
          onSample: ((CVPixelBuffer) -> Void)? = nil) {
         self.id = id
         self.radius = radius
+        self.renderingEnabled = renderingEnabled
         self.onFrame = onFrame
         self.onFailure = onFailure
         self.onSample = onSample
@@ -52,6 +54,15 @@ final class DisplayCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         }
     }
 
+    func setRenderingEnabled(_ value: Bool) {
+        frameQueue.async { [self] in
+            guard !stopped, renderingEnabled != value else { return }
+            renderingEnabled = value
+            pendingBuffer = value ? lastBuffer : nil
+            if value { renderNextFrame() }
+        }
+    }
+
     func stream(_ stream: SCStream, didStopWithError error: Error) {
         frameQueue.async { [self] in
             guard !stopped else { return }
@@ -70,12 +81,12 @@ final class DisplayCapture: NSObject, SCStreamOutput, SCStreamDelegate {
               let buffer = sampleBuffer.imageBuffer else { return }
         lastBuffer = buffer
         onSample?(buffer)
-        pendingBuffer = buffer
+        pendingBuffer = renderingEnabled ? buffer : nil
         renderNextFrame()
     }
 
     private func renderNextFrame() {
-        guard !stopped, !rendering, let buffer = pendingBuffer else { return }
+        guard !stopped, renderingEnabled, !rendering, let buffer = pendingBuffer else { return }
         pendingBuffer = nil
         rendering = true
         let radius = radius

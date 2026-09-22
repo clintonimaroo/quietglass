@@ -47,6 +47,7 @@ final class PrivacySurface {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         image.contents = value
+        image.backgroundColor = nil
         hasImage = true
         CATransaction.commit()
     }
@@ -55,8 +56,9 @@ final class PrivacySurface {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         windowMask.path = path(for: fullScreen ? [panel.frame] : windows + sensitive)
+        image.backgroundColor = hasImage ? nil : DisplayCapture.background
         CATransaction.commit()
-        if peeking || !hasImage || (!fullScreen && windows.isEmpty && sensitive.isEmpty) { panel.orderOut(nil) }
+        if peeking || (!fullScreen && windows.isEmpty && sensitive.isEmpty) { panel.orderOut(nil) }
         else { panel.orderFrontRegardless() }
     }
 
@@ -72,6 +74,7 @@ final class PrivacySurface {
     func clear() {
         panel.orderOut(nil)
         image.contents = nil
+        image.backgroundColor = nil
         windowMask.path = nil
         hasImage = false
     }

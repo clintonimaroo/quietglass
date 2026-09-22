@@ -1,0 +1,11 @@
+
+Nearby-person warning sound
+---------------------------
+NearbyAlert.mp3 is the original fold.mp3 sound from Bendy, included at the
+project owner's request.
+Source: https://trybendy.app/fold.mp3
+Retrieved: September 21, 2026
+SHA-256: b44f75b60e3e553b57589a323a630ac345aa495fd404e8f5bf0be3f8f261d602
+
+This third-party recording is not covered by QuietGlass's MIT license.
+No redistribution license was supplied with the source audio.

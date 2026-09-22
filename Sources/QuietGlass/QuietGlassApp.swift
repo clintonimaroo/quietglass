@@ -57,7 +57,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let mainMenu = NSMenu()
         let applicationItem = NSMenuItem()
         let applicationMenu = NSMenu(title: "QuietGlass")
+        item("About QuietGlass", #selector(showAbout), in: applicationMenu)
+        applicationMenu.addItem(.separator())
         item("Settings…", #selector(showPrivacySettings), in: applicationMenu, key: ",")
+        item("Downloads & Updates…", #selector(showDownloads), in: applicationMenu)
+        item("Check for Updates…", #selector(checkForUpdates), in: applicationMenu)
         applicationMenu.addItem(.separator())
         item("Quit QuietGlass", #selector(quit), in: applicationMenu, key: "q")
         applicationItem.submenu = applicationMenu
@@ -84,6 +88,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         viewMenu.addItem(fullScreen)
         viewItem.submenu = viewMenu
         mainMenu.addItem(viewItem)
+        let helpItem = NSMenuItem(title: "Help", action: nil, keyEquivalent: "")
+        let helpMenu = NSMenu(title: "Help")
+        item("QuietGlass Help", #selector(showHelp), in: helpMenu)
+        item("Report an Issue…", #selector(reportIssue), in: helpMenu)
+        helpItem.submenu = helpMenu
+        mainMenu.addItem(helpItem)
+        NSApp.helpMenu = helpMenu
         NSApp.mainMenu = mainMenu
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         statusItem.button?.image = AppIcon.view.image()
@@ -120,6 +131,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             notch.showControls()
         }
         model.nearby.restore()
+        model.updates.checkIfDue()
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) { buildMenu(menu) }
@@ -156,6 +168,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         item(model.previewing ? "Clear Preview" : "Preview Blur for 5 Seconds", #selector(preview), in: menu)
         item("Clear Screen", #selector(clear), in: menu)
         menu.addItem(.separator())
+        item("About QuietGlass", #selector(showAbout), in: menu)
+        item("QuietGlass Help", #selector(showHelp), in: menu)
+        item("Downloads & Updates…", #selector(showDownloads), in: menu)
+        menu.addItem(.separator())
         item("Quit QuietGlass", #selector(quit), in: menu, key: "q")
     }
 
@@ -179,6 +195,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func chooseArea() { model.privacy.chooseArea() }
     @objc private func toggleNotch() { notch.toggleVisibility() }
     @objc private func resetNotch() { notch.resetPosition(); notch.show() }
+    @objc private func showAbout() {
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.orderFrontStandardAboutPanel(options: [
+            .credits: NSAttributedString(string: "Privacy for what’s on your Mac.\nBuilt by Clinton Imaro · Open source under the MIT License.")
+        ])
+    }
+    @objc private func showHelp() {
+        if let guide = Bundle.main.url(forResource: "QuietGlass Help", withExtension: "html") {
+            NSWorkspace.shared.open(guide)
+        }
+    }
+    @objc private func showDownloads() { openProjectPage("releases/latest") }
+    @objc private func checkForUpdates() { privacySettings.showUpdates(); Task { await model.updates.check() } }
+    @objc private func reportIssue() { openProjectPage("issues") }
+    private func openProjectPage(_ path: String) {
+        guard let url = URL(string: "https://github.com/clintonimaroo/quietglass/\(path)") else { return }
+        NSWorkspace.shared.open(url)
+    }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { privacySettings.show(); notch.show(); return true }
     func applicationWillTerminate(_ notification: Notification) {
         profilePicker.hide()

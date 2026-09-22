@@ -53,6 +53,11 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
 
     let privacy = PrivacyController()
     let nearby = NearbyPeople()
+    let protectionCheck = ProtectionCheck()
+    let loginPreference = LoginPreference()
+    let updates = AppUpdates()
+    private var maintenanceObservations: [AnyCancellable] = []
+    private var protectionCheckObservation: AnyCancellable?
     private var nearbyObservation: AnyCancellable?
     var onOpenPrivacySettings: (() -> Void)?
     var onOpenControls: (() -> Void)?
@@ -109,6 +114,15 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
         super.init()
         nearby.onCoverage = { [weak self] value in self?.privacy.setNearbyCovered(value) }
         nearby.onMonitoring = { [weak self] value in self?.privacy.setNearbyMonitoring(value) }
+        protectionCheck.onBegin = { [weak self] in self?.nearby.suspend(for: .protectionTest) }
+        protectionCheck.onEnd = { [weak self] in self?.nearby.resume(after: .protectionTest) }
+        protectionCheck.onDemoCoverage = { [weak self] in self?.privacy.setTestCovered($0) }
+        protectionCheck.demoAvailable = { [weak self] in self?.privacy.captureUnavailable == false }
+        protectionCheckObservation = protectionCheck.objectWillChange.receive(on: RunLoop.main).sink { [weak self] _ in self?.objectWillChange.send() }
+        maintenanceObservations = [
+            loginPreference.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() },
+            updates.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        ]
         nearby.prepareMonitoring = { [weak self] in
             guard let self else { return .escapeUnavailable }
             if self.nearby.response == .blur, !self.screenPermission { return .screenPermission }
@@ -179,7 +193,7 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
             Task { @MainActor in self?.overlay.activeSpaceChanged() }
         })
         observers.append(NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor in self?.refreshScreenPermission() }
+            Task { @MainActor in self?.refreshScreenPermission(); self?.loginPreference.refresh(); self?.updates.checkIfDue() }
         })
         observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.prepareForSleep() }
@@ -273,13 +287,29 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
         previewing || privacy.fullScreen || privacy.focusEnabled || nearby.wantsMonitoring
     }
 
-    var nearbyBlurUnavailable: Bool { (nearby.enabled || nearby.requesting || nearby.covered) && nearby.response == .blur && privacy.captureUnavailable }
-    var nearbyNeedsAttention: Bool { nearby.needsAttention || nearbyBlurUnavailable }
-    var nearbyNoticeTitle: String { nearbyBlurUnavailable ? "Privacy blur unavailable" : nearby.noticeTitle }
+    var nearbyBlurUnavailable: Bool { (nearby.enabled || nearby.requesting || nearby.covered) && nearby.requiresBlur && privacy.captureUnavailable }
+    var nearbyNeedsAttention: Bool { nearby.needsAttention || nearbyBlurUnavailable || nearby.temporarilyPaused || protectionCheck.demoSeconds != nil || protectionCheck.demoBlurred }
+    var nearbyNoticeTitle: String {
+        if protectionCheck.demoSeconds != nil || protectionCheck.demoBlurred { return "Protection test" }
+        if nearby.temporarilyPaused { return "Nearby people paused" }
+        return nearbyBlurUnavailable ? "Privacy blur unavailable" : nearby.noticeTitle
+    }
     var nearbyNoticeDetail: String {
+        if let seconds = protectionCheck.demoSeconds { return "Test blur starts in \(seconds) seconds" }
+        if protectionCheck.demoBlurred {
+            return privacy.captureUnavailable ? "Test blur unavailable · Check Screen Recording" : "Test blur clears automatically · Esc to stop"
+        }
+        if let seconds = nearby.pauseSecondsRemaining {
+            return String(format: "Resumes in %d:%02d", seconds / 60, seconds % 60)
+        }
         if nearbyBlurUnavailable { return "Open Settings to restore it" }
         if nearby.covered && !privacy.ready { return "Preparing blur · Esc to clear" }
         return nearby.noticeDetail
+    }
+
+    func blurNearbyNow() {
+        guard screenPermission else { requestScreenPermission(); return }
+        nearby.blurNow()
     }
 
     func applyProfile(_ profile: PrivacyProfile) {
@@ -428,6 +458,7 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
     }
 
     func dismissShield(file: StaticString = #fileID, line: UInt = #line) {
+        protectionCheck.stopDemonstration()
         nearby.stop(file: file, line: line)
         cancelLearning()
         stopPreview()
@@ -786,6 +817,8 @@ final class AppModel: NSObject, ObservableObject, CMHeadphoneMotionManagerDelega
     private func save(_ key: String, _ value: Double) { UserDefaults.standard.set(value, forKey: key) }
 
     func shutdown() {
+        updates.shutdown()
+        protectionCheck.close()
         nearby.shutdown()
         stop()
         privacy.shutdown()

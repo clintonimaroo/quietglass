@@ -4,6 +4,23 @@ import XCTest
 @testable import ShieldCore
 
 final class PrivacyPolicyTests: XCTestCase {
+    func testExistingAppRulesMigrateWithoutEnablingAutomaticProtection() throws {
+        let data = Data("{\"bundleID\":\"example.editor\",\"name\":\"Editor\",\"mode\":\"stronger\"}".utf8)
+        let rule = try JSONDecoder().decode(AppPrivacyRule.self, from: data)
+        XCTAssertEqual(rule.mode, .stronger); XCTAssertFalse(rule.protectWindows)
+    }
+
+    func testSavedAreasMatchOnlyExactAppAndWindowWithoutSavingTheTitle() throws {
+        let area = SavedWindowArea(bundleID: "example.editor", appName: "Editor", windowTitle: "Private project", rectangle: CGRect(x: 0.1, y: 0.2, width: 0.3, height: 0.4))
+        let data = try JSONEncoder().encode(area)
+        XCTAssertFalse(String(decoding: data, as: UTF8.self).contains("Private project"))
+        let restored = try JSONDecoder().decode(SavedWindowArea.self, from: data)
+        XCTAssertTrue(restored.matches(bundleID: "example.editor", windowTitle: "Private project"))
+        XCTAssertFalse(restored.matches(bundleID: "another.editor", windowTitle: "Private project"))
+        XCTAssertFalse(restored.matches(bundleID: "example.editor", windowTitle: "Different project"))
+        XCTAssertFalse(restored.matches(bundleID: "example.editor", windowTitle: ""))
+        XCTAssertFalse(SavedWindowArea(bundleID: "example.editor", appName: "Editor", windowTitle: "Window", rectangle: CGRect(x: -1, y: 0, width: 2, height: 1)).isValid)
+    }
     func testStrongerRuleNeverWeakensExistingSettings() {
         for comfort in [2.0, 8, 15, 30] {
             for transition in [5.0, 18, 30] {

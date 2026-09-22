@@ -5,6 +5,20 @@ import AppKit
 @testable import QuietGlass
 
 final class ShieldSurfaceTests: XCTestCase {
+    @MainActor func testNewDisplayHasTemporaryCoverageBeforeFirstCapture() throws {
+        _ = NSApplication.shared
+        let surface = ShieldSurface(screen: try XCTUnwrap(NSScreen.screens.first))
+        defer { surface.panel.close() }
+        surface.resize(to: CGRect(x: 0, y: 0, width: 4, height: 4))
+        surface.update(coverage: 1, direction: .left)
+        XCTAssertTrue(surface.panel.isVisible)
+        XCTAssertNotNil(surface.panel.contentView?.layer?.backgroundColor)
+        XCTAssertFalse(surface.hasImage)
+        surface.update(coverage: 0, direction: .left)
+        surface.keepVisible()
+        XCTAssertFalse(surface.panel.isVisible, "A display with zero coverage must stay clear during refresh")
+        surface.clear(); XCTAssertFalse(surface.panel.isVisible)
+    }
     @MainActor func testGeometryChangesRetainWindowAndPixels() throws {
         _ = NSApplication.shared
         let screen = try XCTUnwrap(NSScreen.screens.first)

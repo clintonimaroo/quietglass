@@ -19,4 +19,4 @@ Reports are reviewed privately. We will coordinate follow-up, a fix where approp
 
 Relevant reports include unintended screen exposure, failures in protection state or permission handling, unauthorized access to saved face data, and unexpected storage or transmission of screen or camera content.
 
-QuietGlass controls screen visibility and complements macOS screen locking. Camera recognition is experimental, and the movement check does not provide Face ID security. See the [camera protection guide](CAMERA-PROTECTION.md) for its behavior and privacy model.
+QuietGlass controls screen visibility and complements macOS screen locking. Camera recognition can make mistakes or be fooled by photos or video; the movement check does not provide Face ID security. See the [camera protection guide](CAMERA-PROTECTION.md) for its behavior and privacy model.

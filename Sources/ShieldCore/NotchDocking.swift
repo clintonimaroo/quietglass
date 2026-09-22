@@ -39,6 +39,13 @@ public enum NotchDocking {
         return CGRect(origin: origin, size: size)
     }
 
+    public static func noticeFrame(size: CGSize, anchor: CGPoint, edge: NotchEdge, in bounds: CGRect) -> CGRect {
+        // The panel can retain its expanded bounds while its buttons collapse.
+        // A warning belongs beside the handle, whose center stays at the anchor.
+        popupFrame(size: size, controls: frame(anchor: anchor, vertical: edge.isVertical, expanded: false),
+                   edge: edge, in: bounds)
+    }
+
     public static func edge(near point: CGPoint, in screen: CGRect, bottom: CGFloat,
                             retaining current: NotchEdge = .floating) -> NotchEdge {
         let sideReach: CGFloat = current.isVertical ? 100 : 64

@@ -38,7 +38,7 @@ enum NearbyCameraStatus: Equatable {
 }
 
 enum NearbyPauseReason: Hashable {
-    case systemSleep, displaySleep, inactiveSession
+    case systemSleep, displaySleep, inactiveSession, protectionTest
 }
 
 struct NearbyFaceSample {
@@ -46,6 +46,7 @@ struct NearbyFaceSample {
     let capturedAt: TimeInterval
     var vector: [Float]? = nil
     var pose: OwnerPose? = nil
+    var bounds: [CGRect] = []
 }
 
 protocol NearbyCameraSession: AnyObject {
@@ -53,15 +54,20 @@ protocol NearbyCameraSession: AnyObject {
     func start()
     func stop()
     func configureRecognition(_ enabled: Bool)
+    func configureDevice(_ id: String?)
 }
 
 extension NearbyCameraSession {
     var previewSession: AVCaptureSession? { nil }
     func configureRecognition(_ enabled: Bool) {}
+    func configureDevice(_ id: String?) {}
 }
 
 @MainActor
 final class NearbyPeople: ObservableObject {
+    private enum OwnerNoticeState {
+        case checking, matching, unmatched, unreadable, noFace, additionalFaces
+    }
     // The switch represents the user's choice, not temporary camera availability.
     @Published private(set) var wantsMonitoring: Bool
     @Published private(set) var enabled = false
@@ -70,6 +76,12 @@ final class NearbyPeople: ObservableObject {
     @Published private(set) var alertActive = false
     @Published private(set) var status: NearbyCameraStatus = .off
     @Published private(set) var response: NearbyResponse
+    @Published private(set) var warningSoundEnabled: Bool
+    @Published private(set) var warningDelay: TimeInterval
+    @Published private(set) var warningSecondsRemaining: Int?
+    @Published private(set) var pauseSecondsRemaining: Int?
+    @Published private(set) var cameras: [CameraChoice] = []
+    @Published private(set) var selectedCameraID: String
     let owner: OwnerRecognition
     var onCoverage: ((Bool) -> Void)?
     var onMonitoring: ((Bool) -> Void)?
@@ -78,6 +90,7 @@ final class NearbyPeople: ObservableObject {
     private let cameraAccess: () async -> Bool
     private let makeCamera: (@escaping (Result<NearbyFaceSample, NearbyCameraFailure>) -> Void) -> NearbyCameraSession
     private let clock: () -> TimeInterval
+    private let wallClock: () -> Date
     private let usesWatchdog: Bool
     private var worker: NearbyCameraSession?
     private var presence = NearbyPresence()
@@ -86,27 +99,65 @@ final class NearbyPeople: ObservableObject {
     private var lastAcceptedFrame: TimeInterval?
     private var warmingCapture = false
     private var watchdog: Timer?
+    private var warningTimer: Timer?
+    private var pauseTimer: Timer?
+    private var pauseUntil: Date?
+    private var pauseUptimeUntil: TimeInterval?
+    private var immediateBlur = false
+    private var warningPolicy = NearbyWarningPolicy()
     private var ownerObservation: AnyCancellable?
     private var ownerRequired = false
     private var ownerPresence = OwnerPresence(turnPositive: Bool.random())
+    private var lastMatchedBounds: CGRect?
     @Published private(set) var ownerPrompt = "Look at the camera"
-    private var ownerMatches = false
+    @Published private var ownerNoticeState: OwnerNoticeState = .checking
+    private var ownerNoticeCandidate: OwnerNoticeState?
+    private var ownerNoticeCandidateSince: TimeInterval = 0
     private var pauseReasons: Set<NearbyPauseReason> = []
+    private var cameraObservers: [NSObjectProtocol] = []
 
     init(preferences: UserDefaults = .standard,
          cameraAccess: @escaping () async -> Bool = NearbyPeople.requestCameraAccess,
          makeCamera: @escaping (@escaping (Result<NearbyFaceSample, NearbyCameraFailure>) -> Void) -> NearbyCameraSession = { FaceCamera(completion: $0) },
          clock: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
+         wallClock: @escaping () -> Date = Date.init,
          usesWatchdog: Bool = true, owner: OwnerRecognition? = nil) {
         self.preferences = preferences
         self.cameraAccess = cameraAccess
         self.makeCamera = makeCamera
         self.clock = clock
+        self.wallClock = wallClock
         self.usesWatchdog = usesWatchdog
         self.owner = owner ?? OwnerRecognition(preferences: preferences)
+        selectedCameraID = preferences.string(forKey: CameraSelection.preferenceKey) ?? ""
         wantsMonitoring = preferences.bool(forKey: "nearbyEnabled")
         response = NearbyResponse(rawValue: preferences.string(forKey: "nearbyResponse") ?? "") ?? .blur
+        warningSoundEnabled = preferences.object(forKey: "nearbyWarningSound") as? Bool ?? true
+        warningDelay = NearbyWarningPolicy.normalizedDelay(
+            preferences.object(forKey: "nearbyWarningDelay") as? Double ?? NearbyWarningPolicy.defaultDelay)
+        if wantsMonitoring, let until = preferences.object(forKey: "nearbyPauseUntil") as? Date, until > wallClock() {
+            pauseUntil = until
+            pauseSecondsRemaining = min(300, Int(ceil(until.timeIntervalSince(wallClock()))))
+            pauseUptimeUntil = clock() + Double(pauseSecondsRemaining ?? 0)
+        }
         ownerObservation = self.owner.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        refreshCameras()
+        for name in [AVCaptureDevice.wasConnectedNotification, AVCaptureDevice.wasDisconnectedNotification] {
+            cameraObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in self?.refreshCameras() }
+            })
+        }
+    }
+
+    func refreshCameras() {
+        cameras = CameraSelection.devices().map { CameraChoice(id: $0.uniqueID, name: $0.localizedName) }
+    }
+
+    func selectCamera(_ id: String) {
+        guard id != selectedCameraID else { return }
+        selectedCameraID = id
+        preferences.set(id, forKey: CameraSelection.preferenceKey)
+        if wantsMonitoring && !temporarilyPaused { begin() }
     }
 
     nonisolated static func requestCameraAccess() async -> Bool {
@@ -124,30 +175,47 @@ final class NearbyPeople: ObservableObject {
 
     var needsCameraPermission: Bool { status == .unavailable(.permission) }
     var needsAttention: Bool { alertActive || canRetry }
+    var requiresBlur: Bool { response == .blur || warningPolicy.escalated || immediateBlur }
+    var temporarilyPaused: Bool { pauseUntil != nil }
     var noticeTitle: String {
         if case .unavailable(let failure) = status { return failure.title }
-        if ownerRequired { return ownerMatches ? ownerPrompt : "Owner not verified" }
+        if ownerRequired { return ownerNoticeTitle }
         return "Additional face detected"
     }
     var noticeDetail: String {
         if covered { return "Blur stays on · Esc to stop" }
+        if let remaining = warningSecondsRemaining {
+            let minutes = remaining / 60
+            let seconds = String(format: "%02d", remaining % 60)
+            return "Blurs in \(minutes):\(seconds) · Esc to stop"
+        }
         if canRetry { return "Open Settings to retry" }
-        if ownerRequired { return "Keep your face in view · Esc to stop" }
         return "Look around · Esc to dismiss"
+    }
+
+    private var ownerNoticeTitle: String {
+        switch ownerNoticeState {
+        case .checking: return "Checking your face…"
+        case .matching: return alertActive ? ownerPrompt : "Owner verified"
+        case .unmatched: return "Owner not verified"
+        case .unreadable: return "Face the camera in good light"
+        case .noFace: return "No face in view"
+        case .additionalFaces: return "Additional face detected"
+        }
     }
 
     var message: String {
         switch status {
         case .off: return "Off"
-        case .paused: return "Paused while your Mac is inactive"
+        case .paused:
+            if let seconds = pauseSecondsRemaining { return String(format: "Paused · Resumes in %d:%02d", seconds / 60, seconds % 60) }
+            return pauseReasons.contains(.protectionTest) ? "Paused during protection check" : "Paused while your Mac is inactive"
         case .requesting: return ownerRequired ? "Unlocking your saved face…" : "Waiting for camera access…"
         case .starting: return covered ? "Restarting camera · Blur stays on" : "Starting camera…"
         case .unavailable(let failure): return failure.title + (covered ? " · Blur stays on" : " · Monitoring stopped")
         case .watching(let count):
             if ownerRequired {
-                if count > 1 { return "Additional face detected · Owner check paused" }
-                if !ownerMatches { return "Owner not verified · Face the camera in good light" }
-                return alertActive ? ownerPrompt : "Owner verified"
+                return ownerNoticeTitle
             }
             if count == 0 { return covered ? "No face in view · Blur stays on" : "No face in view · Detection is limited" }
             if alertActive { return count > 1 ? "Additional face detected" : "Waiting for a steady single face…" }
@@ -159,11 +227,27 @@ final class NearbyPeople: ObservableObject {
         guard response != value else { return }
         response = value
         preferences.set(value.rawValue, forKey: "nearbyResponse")
+        resetWarningDeadline()
         updateProtection()
+    }
+
+    func setWarningDelay(_ seconds: TimeInterval) {
+        let value = NearbyWarningPolicy.normalizedDelay(seconds)
+        guard value != warningDelay else { return }
+        warningDelay = value
+        preferences.set(value, forKey: "nearbyWarningDelay")
+        updateProtection()
+    }
+
+    func setWarningSoundEnabled(_ value: Bool) {
+        guard warningSoundEnabled != value else { return }
+        warningSoundEnabled = value
+        preferences.set(value, forKey: "nearbyWarningSound")
     }
 
     func setEnabled(_ value: Bool) {
         guard value else { stop(); return }
+        cancelTimedPause()
         wantsMonitoring = true
         preferences.set(true, forKey: "nearbyEnabled")
         guard !enabled, !requesting else { return }
@@ -178,7 +262,57 @@ final class NearbyPeople: ObservableObject {
     // Called after the app has connected protection and shortcut callbacks.
     func restore() {
         guard wantsMonitoring, !enabled, !requesting, !canRetry else { return }
+        if pauseUntil != nil { updatePauseDeadline(); return }
         begin()
+    }
+
+    func blurNow() {
+        guard wantsMonitoring, needsAttention, !temporarilyPaused else { return }
+        immediateBlur = true
+        alertActive = true
+        if !ownerRequired { presence.requireClear() }
+        updateProtection()
+    }
+
+    func pauseForFiveMinutes() {
+        guard wantsMonitoring else { return }
+        stopSession()
+        pauseUntil = wallClock().addingTimeInterval(300)
+        pauseUptimeUntil = clock() + 300
+        preferences.set(pauseUntil, forKey: "nearbyPauseUntil")
+        status = .paused
+        updatePauseDeadline()
+    }
+
+    func resumeNow() {
+        guard wantsMonitoring, temporarilyPaused else { return }
+        cancelTimedPause()
+        begin()
+    }
+
+    func updatePauseDeadline() {
+        guard let pauseUntil else { return }
+        // Wall time includes sleep; uptime prevents a backward clock change
+        // from extending a five-minute pause indefinitely.
+        let seconds = min(pauseUntil.timeIntervalSince(wallClock()), (pauseUptimeUntil ?? clock()) - clock())
+        let remaining = min(300, max(0, Int(ceil(seconds))))
+        if remaining == 0 { cancelTimedPause(); if wantsMonitoring { begin() }; return }
+        if pauseSecondsRemaining != remaining { pauseSecondsRemaining = remaining }
+        status = .paused
+        guard pauseTimer == nil else { return }
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.updatePauseDeadline() }
+        }
+        pauseTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func cancelTimedPause() {
+        pauseUntil = nil
+        pauseUptimeUntil = nil
+        pauseSecondsRemaining = nil
+        pauseTimer?.invalidate(); pauseTimer = nil
+        preferences.removeObject(forKey: "nearbyPauseUntil")
     }
 
     func suspend(for reason: NearbyPauseReason) {
@@ -193,6 +327,7 @@ final class NearbyPeople: ObservableObject {
     }
 
     private func begin() {
+        guard !temporarilyPaused else { updatePauseDeadline(); return }
         guard pauseReasons.isEmpty else { status = .paused; return }
         guard !owner.busy, !owner.enrolling else { return }
         if let failure = prepareMonitoring?() {
@@ -206,7 +341,7 @@ final class NearbyPeople: ObservableObject {
         presence.interrupt()
         ownerRequired = owner.enabled
         ownerPresence = OwnerPresence(turnPositive: Bool.random())
-        ownerMatches = false
+        resetOwnerNotice()
         ownerPrompt = ownerPresence.challenge.prompt
         if ownerRequired {
             enabled = true // Remain armed/turn-off-able if authentication fails.
@@ -245,6 +380,7 @@ final class NearbyPeople: ObservableObject {
                 }
             }
             self.worker = worker
+            worker.configureDevice(self.selectedCameraID)
             worker.configureRecognition(self.ownerRequired)
             worker.start()
             if self.usesWatchdog {
@@ -267,15 +403,30 @@ final class NearbyPeople: ObservableObject {
         guard sample.count >= 0, sample.capturedAt.isFinite, sample.capturedAt >= lastFrame,
               sample.capturedAt <= now, now - sample.capturedAt <= 1 else { return }
         if let lastAcceptedFrame, sample.capturedAt <= lastAcceptedFrame { return }
+        if let lastAcceptedFrame, sample.capturedAt - lastAcceptedFrame > 0.6 {
+            ownerNoticeCandidate = nil
+        }
         lastAcceptedFrame = sample.capturedAt
         lastFrame = sample.capturedAt
         let detected: Bool
         if ownerRequired {
             let template = owner.template
-            ownerMatches = sample.count == 1 && sample.vector.map { template?.matches($0) == true } == true && sample.pose != nil
-            detected = ownerPresence.observe(matches: ownerMatches, pose: sample.pose, openEyes: template?.openEyes ?? 0.3, at: sample.capturedAt)
-            if detected && !alertActive { ownerPresence.interrupt(turnPositive: Bool.random()) }
-            ownerPrompt = ownerPresence.challenge.prompt
+            let ownerMatches = sample.count == 1 && sample.vector.map { template?.matches($0) == true } == true && sample.pose?.isValid == true
+            let lostLandmarks = sample.count == 1 && (sample.vector == nil || sample.pose?.isValid != true) &&
+                OwnerPresence.isContinuousFace(lastMatchedBounds, sample.bounds.first)
+            detected = ownerPresence.observe(matches: ownerMatches, pose: sample.pose, openEyes: template?.openEyes ?? 0.3,
+                                             at: sample.capturedAt, continuousFaceWithMissingLandmarks: lostLandmarks)
+            if ownerMatches { lastMatchedBounds = sample.bounds.first }
+            else if !lostLandmarks { lastMatchedBounds = nil }
+            if detected && !alertActive && !ownerPresence.recoveringLandmarks { ownerPresence.interrupt(turnPositive: Bool.random()) }
+            let prompt = ownerPresence.recoveringLandmarks ? "Face the camera again" : ownerPresence.challenge.prompt
+            if ownerPrompt != prompt { ownerPrompt = prompt }
+            let observation: OwnerNoticeState
+            if sample.count > 1 { observation = .additionalFaces }
+            else if sample.count == 0 { observation = .noFace }
+            else if sample.vector == nil || sample.pose?.isValid != true { observation = .unreadable }
+            else { observation = ownerMatches ? .matching : .unmatched }
+            updateOwnerNotice(observation, at: sample.capturedAt)
         } else {
             detected = presence.observe(faceCount: sample.count, at: sample.capturedAt)
         }
@@ -283,6 +434,25 @@ final class NearbyPeople: ObservableObject {
         let next = NearbyCameraStatus.watching(sample.count)
         if status != next { status = next }
         updateProtection()
+    }
+
+    private func resetOwnerNotice() {
+        ownerNoticeState = .checking
+        ownerNoticeCandidate = nil
+        lastMatchedBounds = nil
+    }
+
+    // Stabilize presentation only. Every fresh sample still reaches the owner
+    // policy above, so a delayed label cannot defer blur or authorize clearing.
+    private func updateOwnerNotice(_ observation: OwnerNoticeState, at time: TimeInterval) {
+        guard observation != ownerNoticeState else { ownerNoticeCandidate = nil; return }
+        if ownerNoticeCandidate != observation {
+            ownerNoticeCandidate = observation
+            ownerNoticeCandidateSince = time
+        }
+        guard time - ownerNoticeCandidateSince >= 0.3 else { return }
+        ownerNoticeState = observation
+        ownerNoticeCandidate = nil
     }
 
     private func failed(_ failure: NearbyCameraFailure) {
@@ -293,7 +463,7 @@ final class NearbyPeople: ObservableObject {
         presence.interrupt()
         if ownerRequired {
             ownerPresence.interrupt(turnPositive: Bool.random())
-            ownerMatches = false
+            resetOwnerNotice()
             alertActive = true
             owner.endMonitoring()
         }
@@ -302,8 +472,14 @@ final class NearbyPeople: ObservableObject {
     }
 
     private func updateProtection() {
-        let nextCovered = response == .blur && alertActive
-        let nextWarming = response == .blur && (nextCovered || (enabled && !canRetry))
+        if !alertActive && !canRetry { immediateBlur = false }
+        updateWarningDeadline()
+        if warningPolicy.escalated && !alertActive {
+            alertActive = true
+            if !ownerRequired { presence.requireClear() }
+        }
+        let nextCovered = (response == .blur && alertActive) || warningPolicy.escalated || immediateBlur
+        let nextWarming = nextCovered || (response == .blur && enabled && !canRetry)
         if nextWarming != warmingCapture {
             warmingCapture = nextWarming
             onMonitoring?(nextWarming)
@@ -314,6 +490,35 @@ final class NearbyPeople: ObservableObject {
         }
     }
 
+    func checkWarningDeadline() {
+        updateProtection()
+    }
+
+    private func updateWarningDeadline() {
+        warningPolicy.update(active: response == .warning && needsAttention, delay: warningDelay, at: clock())
+        if warningSecondsRemaining != warningPolicy.secondsRemaining {
+            warningSecondsRemaining = warningPolicy.secondsRemaining
+        }
+        guard let remaining = warningSecondsRemaining, remaining > 0 else {
+            warningTimer?.invalidate(); warningTimer = nil
+            return
+        }
+        guard warningTimer == nil else { return }
+        // Camera callbacks can stop during a failure. The deadline and countdown
+        // therefore have their own clock and do not depend on another frame.
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.checkWarningDeadline() }
+        }
+        warningTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func resetWarningDeadline() {
+        warningTimer?.invalidate(); warningTimer = nil
+        warningPolicy = NearbyWarningPolicy()
+        warningSecondsRemaining = nil
+    }
+
     func stop(file: StaticString = #fileID, line: UInt = #line) {
         if wantsMonitoring {
             Logger(subsystem: "local.clinton.QuietGlass", category: "NearbyPeople")
@@ -321,10 +526,14 @@ final class NearbyPeople: ObservableObject {
         }
         wantsMonitoring = false
         preferences.set(false, forKey: "nearbyEnabled")
+        cancelTimedPause()
         stopSession()
     }
 
     func shutdown() {
+        pauseTimer?.invalidate(); pauseTimer = nil
+        for observer in cameraObservers { NotificationCenter.default.removeObserver(observer) }
+        cameraObservers.removeAll()
         stopSession()
     }
 
@@ -332,15 +541,17 @@ final class NearbyPeople: ObservableObject {
         generation += 1
         worker?.stop(); worker = nil
         watchdog?.invalidate(); watchdog = nil
+        resetWarningDeadline()
         requesting = false
         enabled = false
         covered = false
         alertActive = false
+        immediateBlur = false
         warmingCapture = false
         presence = NearbyPresence()
         owner.endMonitoring()
         ownerRequired = false
-        ownerMatches = false
+        resetOwnerNotice()
         ownerPresence = OwnerPresence(turnPositive: Bool.random())
         lastAcceptedFrame = nil
         status = .off
@@ -360,12 +571,14 @@ final class FaceCamera: NSObject, NearbyCameraSession, AVCaptureVideoDataOutputS
     private var analysisFailures = 0
     private var recognition = false
     private var recognizer: OwnerFaceModel?
+    private var deviceID: String?
 
     init(recognition: Bool = false, completion: @escaping (Result<NearbyFaceSample, NearbyCameraFailure>) -> Void) {
         self.recognition = recognition; self.completion = completion
     }
 
     func configureRecognition(_ enabled: Bool) { queue.async { [self] in recognition = enabled } }
+    func configureDevice(_ id: String?) { queue.async { [self] in deviceID = id } }
 
     func start() {
         queue.async { [self] in
@@ -375,7 +588,7 @@ final class FaceCamera: NSObject, NearbyCameraSession, AVCaptureVideoDataOutputS
                     do { recognizer = try OwnerFaceModel() }
                     catch { throw NearbyCameraFailure.recognition }
                 }
-                guard let device = AVCaptureDevice.default(for: .video) else { throw NearbyCameraFailure.noCamera }
+                guard let device = CameraSelection.device(id: deviceID) else { throw NearbyCameraFailure.noCamera }
                 let input = try AVCaptureDeviceInput(device: device)
                 let output = AVCaptureVideoDataOutput()
                 output.alwaysDiscardsLateVideoFrames = true
@@ -457,7 +670,7 @@ final class FaceCamera: NSObject, NearbyCameraSession, AVCaptureVideoDataOutputS
                     try VNImageRequestHandler(cvPixelBuffer: buffer, orientation: .up, options: [:]).perform([request])
                     faces = (request.results ?? []).filter { $0.confidence >= 0.6 }
                 }
-                var sample = NearbyFaceSample(count: faces.count, capturedAt: now)
+                var sample = NearbyFaceSample(count: faces.count, capturedAt: now, bounds: faces.map(\.boundingBox))
                 if recognition, faces.count == 1 {
                     guard let recognizer else { throw OwnerModelError.unavailable }
                     if let features = try recognizer.features(buffer: buffer, face: faces[0]) {

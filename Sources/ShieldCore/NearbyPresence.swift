@@ -10,6 +10,11 @@ public struct NearbyPresence {
 
     public init() {}
 
+    public mutating func requireClear() {
+        covered = true
+        interrupt()
+    }
+
     public mutating func interrupt() {
         candidate = nil
         lastSample = nil

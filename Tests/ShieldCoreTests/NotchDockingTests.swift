@@ -106,4 +106,23 @@ final class NotchDockingTests: XCTestCase {
         XCTAssertTrue(screen.contains(popup))
         XCTAssertEqual(controls.minY - popup.maxY, 8)
     }
+
+    func testWarningStaysCenteredOnHandleRatherThanExpandedControls() {
+        let size = CGSize(width: 312, height: 56)
+        for display in [screen, CGRect(x: -1920, y: 130, width: 1920, height: 1080)] {
+            for edge in [NotchEdge.left, .right, .bottom, .floating] {
+                let anchor = NotchDocking.anchor(for: edge, in: display, bottom: display.minY + 96)
+                let notice = NotchDocking.noticeFrame(size: size, anchor: anchor, edge: edge, in: display)
+                XCTAssertTrue(display.contains(notice))
+                if edge.isVertical {
+                    XCTAssertEqual(notice.midY, anchor.y)
+                    if edge == .left { XCTAssertEqual(notice.minX - anchor.x, 23) }
+                    else { XCTAssertEqual(anchor.x - notice.maxX, 23) }
+                } else {
+                    XCTAssertEqual(notice.midX, anchor.x)
+                    XCTAssertEqual(notice.minY - anchor.y, 23)
+                }
+            }
+        }
+    }
 }

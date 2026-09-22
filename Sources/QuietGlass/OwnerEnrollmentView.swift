@@ -44,7 +44,7 @@ struct OwnerEnrollmentScreen: View {
     }
     private var subtitle: String {
         if ready { return "Save your face to use owner recognition.\nYour camera is now off." }
-        if scanning { return "Keep your face in view and follow each step." }
+        if scanning { return "A small head turn is enough. Blink naturally." }
         if busy { return "Use Touch ID or your Mac password\nto continue securely." }
         return "Set up your face so QuietGlass can check\nit’s you before clearing protection."
     }
@@ -57,7 +57,7 @@ struct OwnerEnrollmentScreen: View {
                     Image(systemName: "xmark").font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(.white.opacity(0.55))
                         .frame(width: 24, height: 24)
-                        .background(.white.opacity(0.06), in: Circle())
+                        .background(ControlAppearance.fill, in: Circle())
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain).keyboardShortcut(.cancelAction)
@@ -67,7 +67,6 @@ struct OwnerEnrollmentScreen: View {
 
             VStack(spacing: 0) {
                 OwnerFaceGuide(progress: progress, scanning: scanning, ready: ready,
-                               eyesClosed: scanning && prompt.contains("Close"),
                                turn: scanning && prompt.contains("Turn") ? (prompt.contains("left") ? -1 : 1) : 0,
                                previewSession: previewSession)
                     .frame(width: scanning ? 204 : 144, height: scanning ? 204 : 144)
@@ -80,9 +79,9 @@ struct OwnerEnrollmentScreen: View {
                     .fixedSize(horizontal: false, vertical: true).padding(.top, 10)
                 if scanning {
                     HStack(spacing: 6) {
-                        ForEach(0..<5) { step in
-                            Capsule().fill(Double(step) / 5 < progress ? accent : Color.white.opacity(0.10))
-                                .frame(width: 28, height: 3)
+                        ForEach(0..<3) { step in
+                            Capsule().fill(Double(step) / 3 < progress ? accent : Color.white.opacity(0.10))
+                                .frame(width: 42, height: 3)
                         }
                     }
                     .padding(.top, 22).accessibilityElement(children: .ignore)
@@ -120,17 +119,18 @@ struct OwnerEnrollmentScreen: View {
                 } else {
                     Button(action: action) {
                         HStack(spacing: 8) {
-                            if busy { ProgressView().controlSize(.mini).tint(Color(white: 0.15)) }
+                            if busy { ProgressView().controlSize(.mini).tint(.white) }
                             Text(busy ? (ready ? "Saving…" : "Waiting for confirmation…") : (ready ? "Save my face" : "Get started"))
                                 .font(.system(size: 13, weight: .semibold))
                         }
-                        .foregroundStyle(Color(white: 0.13)).frame(maxWidth: .infinity, minHeight: 36)
-                        .background(accent.opacity(busy ? 0.6 : 1), in: RoundedRectangle(cornerRadius: 9))
+                        .foregroundStyle(Color.white.opacity(0.88)).frame(maxWidth: .infinity, minHeight: 36)
+                        .background(ControlAppearance.fill, in: RoundedRectangle(cornerRadius: 9))
+                        .opacity(busy ? 0.6 : 1)
                         .contentShape(RoundedRectangle(cornerRadius: 9))
                     }
                     .buttonStyle(.plain).disabled(busy).keyboardShortcut(.defaultAction)
                 }
-                Text("Experimental · Not a replacement for locking your Mac")
+                Text("Lock your Mac when you leave it unattended")
                     .font(.system(size: 11)).foregroundStyle(.white.opacity(0.48)).multilineTextAlignment(.center)
                     .padding(.top, 12).padding(.bottom, 28)
             }
@@ -144,7 +144,6 @@ private struct OwnerFaceGuide: View {
     let progress: Double
     let scanning: Bool
     let ready: Bool
-    let eyesClosed: Bool
     let turn: Double
     let previewSession: AVCaptureSession?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -170,7 +169,7 @@ private struct OwnerFaceGuide: View {
             if ready {
                 Image(systemName: "checkmark").font(.system(size: 32, weight: .light)).foregroundStyle(accent)
             } else {
-                FaceOutline(eyesClosed: eyesClosed)
+                FaceOutline()
                     .stroke(accent.opacity(0.9), style: StrokeStyle(lineWidth: 2.2, lineCap: .round, lineJoin: .round))
                     .frame(width: 62, height: 74)
                     .rotation3DEffect(.degrees(turn * 24), axis: (x: 0, y: 1, z: 0))
@@ -222,7 +221,6 @@ private final class OwnerCameraPreviewView: NSView {
 }
 
 private struct FaceOutline: Shape {
-    let eyesClosed: Bool
     func path(in rect: CGRect) -> Path {
         let w = rect.width, h = rect.height
         var p = Path()
@@ -231,8 +229,8 @@ private struct FaceOutline: Shape {
         p.move(to: CGPoint(x: w*0.07, y: h*0.50))
         p.addCurve(to: CGPoint(x: w*0.93, y: h*0.50), control1: CGPoint(x: w*0.06, y: h*1.14), control2: CGPoint(x: w*0.94, y: h*1.14))
         for x in [0.30, 0.70] {
-            p.move(to: CGPoint(x: w*(x - (eyesClosed ? 0.055 : 0)), y: h*0.35))
-            p.addLine(to: CGPoint(x: w*(x + (eyesClosed ? 0.055 : 0)), y: h*(eyesClosed ? 0.35 : 0.43)))
+            p.move(to: CGPoint(x: w*x, y: h*0.35))
+            p.addLine(to: CGPoint(x: w*x, y: h*0.43))
         }
         p.move(to: CGPoint(x: w*0.51, y: h*0.43))
         p.addLine(to: CGPoint(x: w*0.51, y: h*0.60))

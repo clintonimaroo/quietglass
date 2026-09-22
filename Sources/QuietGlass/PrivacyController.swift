@@ -31,11 +31,13 @@ final class PrivacyController: NSObject, ObservableObject, SCContentSharingPicke
     @Published private(set) var captureUnavailable = false
     @Published private(set) var ready = false
     @Published private(set) var rules: [AppPrivacyRule]
+    @Published private(set) var savedAreas: [SavedWindowArea]
     @Published private(set) var frontAppName = "No active app"
     @Published private(set) var frontBundleID: String?
     @Published private(set) var focusEnabled = false
     @Published private(set) var nearbyMonitoring = false
     @Published private(set) var nearbyCovered = false
+    @Published private(set) var testCovered = false
     @Published private(set) var displayNames = NSScreen.screens.map(\.localizedName)
     @Published private(set) var customPhrases: [String]
     @Published var scanEnabled: Bool {
@@ -78,6 +80,7 @@ final class PrivacyController: NSObject, ObservableObject, SCContentSharingPicke
         scanEnabled = prefs.bool(forKey: "privacyScanEnabled")
         scanOptions = SensitiveTextOptions(rawValue: prefs.object(forKey: "privacyScanOptions") == nil ? 1 : prefs.integer(forKey: "privacyScanOptions"))
         rules = prefs.data(forKey: "privacyAppRules").flatMap { try? JSONDecoder().decode([AppPrivacyRule].self, from: $0) } ?? []
+        savedAreas = (prefs.data(forKey: "privacySavedAreas").flatMap { try? JSONDecoder().decode([SavedWindowArea].self, from: $0) } ?? []).filter(\.isValid)
         super.init()
         SCContentSharingPicker.shared.add(self)
         if let app = NSWorkspace.shared.frontmostApplication { activated(app) }
@@ -93,8 +96,9 @@ final class PrivacyController: NSObject, ObservableObject, SCContentSharingPicke
         })
     }
 
-    var fullScreen: Bool { instant || nearbyCovered }
-    var wantsProtection: Bool { fullScreen || nearbyMonitoring || (!paused && (selectedWindow != nil || !protectedAreas.isEmpty || scanEnabled || focusEnabled)) }
+    var fullScreen: Bool { instant || nearbyCovered || testCovered }
+    var hasAutomaticProtection: Bool { rules.contains(where: \.protectWindows) || !savedAreas.isEmpty }
+    var wantsProtection: Bool { fullScreen || nearbyMonitoring || (!paused && (selectedWindow != nil || !protectedAreas.isEmpty || scanEnabled || focusEnabled || hasAutomaticProtection)) }
 
     func setFocus(_ value: Bool) {
         guard value != focusEnabled else { return }
@@ -114,6 +118,13 @@ final class PrivacyController: NSObject, ObservableObject, SCContentSharingPicke
         guard value != nearbyCovered else { return }
         nearbyCovered = value
         refreshGeometry()
+        onActivityChanged?()
+    }
+
+    func setTestCovered(_ value: Bool) {
+        guard value != testCovered else { return }
+        testCovered = value
+        restartCapture()
         onActivityChanged?()
     }
 
@@ -168,9 +179,42 @@ final class PrivacyController: NSObject, ObservableObject, SCContentSharingPicke
 
     func removeRule(_ id: String) { rules.removeAll { $0.id == id }; saveRules() }
 
+    func setAutomaticWindowProtection(_ id: String, enabled: Bool) {
+        guard let index = rules.firstIndex(where: { $0.id == id }) else { return }
+        rules[index].protectWindows = enabled
+        if enabled { paused = false }
+        saveRules()
+    }
+
     private func saveRules() {
         if let data = try? JSONEncoder().encode(rules) { UserDefaults.standard.set(data, forKey: "privacyAppRules") }
         onRulesChanged?()
+        restartCapture()
+    }
+
+    func rememberArea(_ area: ProtectedArea) {
+        guard let app = NSRunningApplication(processIdentifier: area.window.owner), let bundle = app.bundleIdentifier,
+              let item = windowList(onScreen: false).first(where: {
+                  ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value == area.window.id &&
+                  ($0[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == area.window.owner
+              }), let title = item[kCGWindowName as String] as? String, !title.isEmpty else {
+            notice = "This window has no readable title. Keep the area selected for this session instead."
+            return
+        }
+        let saved = SavedWindowArea(bundleID: bundle, appName: app.localizedName ?? area.window.name,
+                                    windowTitle: title, rectangle: area.rectangle)
+        guard saved.isValid else { return }
+        if !savedAreas.contains(where: { $0.titleDigest == saved.titleDigest && $0.bundleID == bundle && $0.rectangle == area.rectangle }) {
+            savedAreas.append(saved)
+        }
+        protectedAreas.removeAll { $0.id == area.id }
+        saveAreas()
+    }
+
+    func removeSavedArea(_ id: UUID) { savedAreas.removeAll { $0.id == id }; saveAreas() }
+    private func saveAreas() {
+        if let data = try? JSONEncoder().encode(savedAreas) { UserDefaults.standard.set(data, forKey: "privacySavedAreas") }
+        restartCapture()
     }
 
     func toggleInstant() {
@@ -192,6 +236,7 @@ final class PrivacyController: NSObject, ObservableObject, SCContentSharingPicke
         protectedAreas.removeAll()
         instant = false
         nearbyCovered = false
+        testCovered = false
         focusEnabled = false
         peeking = false
         paused = true
@@ -310,12 +355,13 @@ final class PrivacyController: NSObject, ObservableObject, SCContentSharingPicke
         captureUnavailable = false
         captureAllowed = false
         guard wantsProtection else { onActivityChanged?(); return }
-        guard requestEscape?() == true else { paused = true; instant = false; nearbyCovered = false; captureUnavailable = true; notice = "Escape is unavailable. Protection is paused."; onActivityChanged?(); return }
+        guard requestEscape?() == true else { paused = true; instant = false; nearbyCovered = false; testCovered = false; captureUnavailable = true; notice = "Escape is unavailable. Protection is paused."; onActivityChanged?(); return }
         guard CGPreflightScreenCaptureAccess() else {
             captureUnavailable = true
             paused = true
             instant = false
             nearbyCovered = false
+            testCovered = false
             notice = "Allow screen access in the notch controls to use privacy blur."
             onActivityChanged?()
             return
@@ -376,6 +422,23 @@ final class PrivacyController: NSObject, ObservableObject, SCContentSharingPicke
         }
     }
 
+    static func contentWindowItems(in items: [[String: Any]], bundleIdentifiers: [pid_t: String]) -> [[String: Any]] {
+        // Desktop and cursor decorations have transparent pixels even when
+        // CGWindowList reports alpha 1. Their rectangular bounds are not opaque
+        // content and must not cut holes in controls or protected windows.
+        // Keep other utility apps: accessory status alone does not mean transparent.
+        let decorations: Set<String> = [
+            "com.apple.dock",
+            "com.apple.TextInputUI.xpc.CursorUIViewService",
+            "com.openai.sky.CUAService"
+        ]
+        return items.filter { item in
+            guard let pid = (item[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value,
+                  let bundle = bundleIdentifiers[pid] else { return true }
+            return !decorations.contains(bundle)
+        }
+    }
+
     static func visibleControlRegions(in items: [[String: Any]], appPID: pid_t, desktopTop: CGFloat) -> [CGRect] {
         var controls: [CGRect] = []
         var occluders: [CGRect] = []
@@ -401,11 +464,10 @@ final class PrivacyController: NSObject, ObservableObject, SCContentSharingPicke
     private func refreshGeometry() {
         guard wantsProtection else { return }
         visibleRegions = []
-        let dockPID = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first?.processIdentifier
-        let items = windowList(onScreen: true).filter { item in
-            guard let dockPID else { return true }
-            return (item[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value != dockPID
-        }
+        let bundleIdentifiers = Dictionary(uniqueKeysWithValues: NSWorkspace.shared.runningApplications.compactMap { app in
+            app.bundleIdentifier.map { (app.processIdentifier, $0) }
+        })
+        let items = Self.contentWindowItems(in: windowList(onScreen: true), bundleIdentifiers: bundleIdentifiers)
         let top = NSScreen.screens.first?.frame.maxY ?? 0
         controlRegions = Self.visibleControlRegions(in: items, appPID: ProcessInfo.processInfo.processIdentifier, desktopTop: top)
         focusWindow = frontPID.flatMap { Self.frontWindowItem(in: items, for: $0) }.flatMap { item in
@@ -413,6 +475,11 @@ final class PrivacyController: NSObject, ObservableObject, SCContentSharingPicke
                   let bounds = item[kCGWindowBounds as String] as? NSDictionary,
                   let quartz = CGRect(dictionaryRepresentation: bounds) else { return nil }
             return CGRect(x: quartz.minX, y: top - quartz.maxY, width: quartz.width, height: quartz.height)
+        }
+        if !fullScreen, !paused, hasAutomaticProtection {
+            visibleRegions += Self.automaticRegions(in: items, rules: rules, savedAreas: savedAreas,
+                                                   bundleIdentifiers: bundleIdentifiers,
+                                                   appPID: ProcessInfo.processInfo.processIdentifier, desktopTop: top)
         }
         if !fullScreen, !paused, let selected = selectedWindow {
             var occluders: [CGRect] = []
@@ -428,12 +495,12 @@ final class PrivacyController: NSObject, ObservableObject, SCContentSharingPicke
                     continue
                 }
                 if number.uint32Value == selected.id, owner.int32Value == selected.owner {
-                    visibleRegions = ScreenRegions.visible(frame, behind: occluders)
+                    visibleRegions += ScreenRegions.visible(frame, behind: occluders)
                     break
                 }
                 if (item[kCGWindowLayer as String] as? Int ?? 0) >= 0 { occluders.append(frame) }
             }
-            if visibleRegions.isEmpty, !windowList(onScreen: false).contains(where: {
+            if !windowList(onScreen: false).contains(where: {
                 ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value == selected.id &&
                 ($0[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == selected.owner
             }) {
@@ -472,6 +539,32 @@ final class PrivacyController: NSObject, ObservableObject, SCContentSharingPicke
         startCaptureIfNeeded()
     }
 
+    static func automaticRegions(in items: [[String: Any]], rules: [AppPrivacyRule], savedAreas: [SavedWindowArea],
+                                 bundleIdentifiers: [pid_t: String], appPID: pid_t, desktopTop: CGFloat) -> [CGRect] {
+        var occluders: [CGRect] = []
+        var regions: [CGRect] = []
+        let protectedApps = Set(rules.filter(\.protectWindows).map(\.bundleID))
+        for item in items {
+            guard let owner = (item[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value,
+                  (item[kCGWindowAlpha as String] as? Double ?? 1) > 0,
+                  let bounds = item[kCGWindowBounds as String] as? NSDictionary,
+                  let quartz = CGRect(dictionaryRepresentation: bounds) else { continue }
+            let layer = item[kCGWindowLayer as String] as? Int ?? 0
+            if owner == appPID && layer != 0 { continue }
+            let frame = CGRect(x: quartz.minX, y: desktopTop - quartz.maxY, width: quartz.width, height: quartz.height)
+            if owner != appPID, layer == 0, let bundle = bundleIdentifiers[owner] {
+                if protectedApps.contains(bundle) { regions += ScreenRegions.visible(frame, behind: occluders) }
+                else if let title = item[kCGWindowName as String] as? String {
+                    for area in savedAreas where area.matches(bundleID: bundle, windowTitle: title) {
+                        regions += ScreenRegions.visible(ScreenRegions.fromVision(area.rectangle, in: frame), behind: occluders)
+                    }
+                }
+            }
+            if layer >= 0 { occluders.append(frame) }
+        }
+        return regions
+    }
+
     private func render() {
         for (id, surface) in surfaces {
             var regions = visibleRegions.map { $0.intersection(surface.panel.frame) }.filter { !$0.isNull && !$0.isEmpty }
@@ -479,6 +572,7 @@ final class PrivacyController: NSObject, ObservableObject, SCContentSharingPicke
                 regions += ScreenRegions.visible(surface.panel.frame, behind: controlRegions + (focusWindow.map { [$0] } ?? []))
             }
             let sensitive = (paused ? [] : detected[id] ?? []).flatMap { ScreenRegions.visible(ScreenRegions.fromVision($0, in: surface.panel.frame), behind: controlRegions) }
+            captures[id]?.setRenderingEnabled(fullScreen || !regions.isEmpty || !sensitive.isEmpty)
             surface.update(windows: fullScreen ? [] : regions, sensitive: fullScreen ? [] : sensitive, fullScreen: fullScreen, peeking: peeking && instant && !nearbyCovered)
         }
     }
@@ -502,7 +596,7 @@ final class PrivacyController: NSObject, ObservableObject, SCContentSharingPicke
                     let config = SCStreamConfiguration()
                     config.width = max(1, display.width)
                     config.height = max(1, display.height)
-                    config.minimumFrameInterval = CMTime(value: 1, timescale: (self.fullScreen || self.nearbyMonitoring || self.focusEnabled) ? 30 : (self.selectedWindow == nil && self.protectedAreas.isEmpty) ? 3 : 12)
+                    config.minimumFrameInterval = CMTime(value: 1, timescale: (self.fullScreen || self.nearbyMonitoring || self.focusEnabled) ? 30 : (self.selectedWindow == nil && self.protectedAreas.isEmpty && !self.hasAutomaticProtection) ? 3 : 12)
                     config.queueDepth = 3
                     config.backgroundColor = DisplayCapture.background
                     config.shouldBeOpaque = true
@@ -523,7 +617,7 @@ final class PrivacyController: NSObject, ObservableObject, SCContentSharingPicke
                     } : nil
                     self.analyzers[id] = analyzer
                     let capture = DisplayCapture(id: session, filter: filter, configuration: config,
-                        radius: self.blurRadius,
+                        radius: self.blurRadius, renderingEnabled: self.fullScreen || self.focusEnabled || !self.visibleRegions.isEmpty || !(self.detected[id] ?? []).isEmpty,
                         onFrame: { [weak self] image in
                             guard let self, self.generation == token, self.captures[id]?.id == session else { return }
                             self.surfaces[id]?.setImage(image)

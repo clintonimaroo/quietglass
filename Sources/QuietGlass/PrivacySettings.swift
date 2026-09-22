@@ -10,6 +10,7 @@ private final class SettingsWindowState: ObservableObject {
     @Published var presentation = 0
     @Published var profileRequest = 0
     @Published var nearbyRequest = 0
+    @Published var maintenanceRequest = 0
     @Published var sidebarToggleRequest = 0
 }
 
@@ -70,6 +71,7 @@ final class PrivacySettingsController: NSObject, NSWindowDelegate {
         windowState.nearbyRequest += 1
         show()
     }
+    func showUpdates() { windowState.maintenanceRequest += 1; show() }
 
     func windowWillClose(_ notification: Notification) { NSApp.setActivationPolicy(.accessory) }
     func windowWillEnterFullScreen(_ notification: Notification) { windowState.fullScreen = true }
@@ -122,9 +124,9 @@ private enum SettingsPage: String, CaseIterable, Identifiable {
     }
     var searchTerms: String {
         switch self {
-        case .general: return "profile home office public focus full screen demo recording shortcut privacy appearance blur strength preview"
-        case .protection: return "window area sensitive text phrases keys email card camera nearby people"
-        case .appRules: return "applications rules stronger pause"
+        case .general: return "profile home office public focus full screen demo recording shortcut privacy appearance blur strength preview launch login updates"
+        case .protection: return "window area saved remember sensitive text phrases keys email card camera nearby people coverage test side preview"
+        case .appRules: return "applications rules stronger pause automatic windows"
         case .headTracking: return "airpods motion setup recenter calibration learning sensitivity monitor external displays screen head position"
         }
     }
@@ -136,7 +138,8 @@ private struct PrivacySettingsView: View {
     @ObservedObject var windowState: SettingsWindowState
     @State private var editingPhrases = false
     @State private var settingUpOwner = false
-    @State private var deletingOwner = false
+    @State private var testingProtection = false
+    @State private var showingOwnerDeletion = false
     @State private var phraseDraft = ""
     @State private var page: SettingsPage = .general
     @State private var sidebarPinned = false
@@ -175,6 +178,11 @@ private struct PrivacySettingsView: View {
                     await Task.yield()
                     scroll.scrollTo("nearbyPeople", anchor: .top)
                 }
+            }
+            .onChange(of: windowState.maintenanceRequest) { _, _ in
+                if page != .general { backHistory.append(page); forwardHistory.removeAll() }
+                page = .general
+                Task { @MainActor in await Task.yield(); scroll.scrollTo("maintenance", anchor: .top) }
             }
             }
             .padding(.leading, sidebarPinned && geometry.size.width >= 1040 ? 275 : 0)
@@ -218,7 +226,7 @@ private struct PrivacySettingsView: View {
         .ignoresSafeArea(.container, edges: .top)
         .foregroundStyle(SettingsPalette.text)
         .font(.system(size: 14))
-        .buttonStyle(SettingsButtonStyle())
+        .buttonStyle(QuietGlassButtonStyle())
         .toggleStyle(SettingsSwitchStyle())
         .controlSize(.regular)
         .tint(SettingsPalette.accent)
@@ -239,9 +247,10 @@ private struct PrivacySettingsView: View {
         }
         .sheet(isPresented: $editingPhrases) { phraseEditor }
         .sheet(isPresented: $settingUpOwner) { OwnerEnrollmentView(owner: model.nearby.owner) }
-        .confirmationDialog("Delete your saved face?", isPresented: $deletingOwner, titleVisibility: .visible) {
-            Button("Delete face data", role: .destructive) { model.nearby.stop(); model.nearby.owner.deleteEnrollment() }
-        } message: { Text("This removes the face template from Keychain and turns off owner recognition.") }
+        .sheet(isPresented: $testingProtection) {
+            ProtectionCheckView(check: model.protectionCheck, cameraID: model.nearby.selectedCameraID,
+                                response: model.nearby.response, canBlur: model.screenPermission)
+        }
     }
 
     private var sidebarToggle: some View {
@@ -302,8 +311,8 @@ private struct PrivacySettingsView: View {
                 Text("Text recognition can miss matches, especially across line breaks.")
                     .font(.system(size: 12)).foregroundStyle(SettingsPalette.secondary)
                 Button("Save phrases") { privacy.savePhrases(phraseDraft); editingPhrases = false }
-                    .buttonStyle(.borderedProminent).buttonBorderShape(.capsule)
-                    .controlSize(.large).tint(SettingsPalette.accent)
+                    .buttonStyle(QuietGlassButtonStyle())
+                    .controlSize(.large)
                     .keyboardShortcut(.defaultAction)
             }
             .padding(28).frame(width: 460, height: 380)
@@ -413,6 +422,7 @@ private struct PrivacySettingsView: View {
             appearanceSettings
             focusSettings
             protectionStatus
+            maintenanceSettings.id("maintenance")
         case .protection:
             windowProtection
             sensitiveProtection
@@ -436,8 +446,7 @@ private struct PrivacySettingsView: View {
                 .font(.system(size: 13))
                 .frame(minWidth: 74)
                 .padding(.horizontal, 12).padding(.vertical, 7)
-                .background(Color(white: 0.18), in: RoundedRectangle(cornerRadius: 8))
-                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.white.opacity(0.06), lineWidth: 1))
+                .background(ControlAppearance.fill, in: RoundedRectangle(cornerRadius: 10))
                 .accessibilityHidden(true)
                 .overlay(ProfilePickerTrigger(model: model))
                 .fixedSize()
@@ -447,6 +456,28 @@ private struct PrivacySettingsView: View {
                 row("Head tracking is paused", detail: "Your profile applies when tracking starts. Manual blur stays available.") {
                     Button("Start tracking") { model.start() }
                 }
+            }
+        }
+    }
+
+    private var maintenanceSettings: some View {
+        section("Everyday use") {
+            row("Launch at login", detail: "Keep QuietGlass ready when you sign in to your Mac.") {
+                Toggle("Launch at login", isOn: Binding(get: { model.loginPreference.enabled }, set: { model.loginPreference.setEnabled($0) })).labelsHidden()
+            }
+            if model.loginPreference.needsApproval {
+                row("Approve QuietGlass in Login Items") { Button("Open Settings") { model.loginPreference.openSettings() } }
+            }
+            if let message = model.loginPreference.message { note(message, warning: true) }
+            divider
+            row("Check for updates", detail: model.updates.message) {
+                Button(model.updates.checking ? "Checking…" : "Check now") { Task { await model.updates.check() } }
+                    .disabled(model.updates.checking)
+                if let page = model.updates.downloadPage { Button("View download") { NSWorkspace.shared.open(page) } }
+            }
+            divider
+            row("Check automatically", detail: "Check GitHub for a public release once a day while QuietGlass is open. Downloads and installation stay under your control.") {
+                Toggle("Check automatically", isOn: Binding(get: { model.updates.automatic }, set: { model.updates.automatic = $0 })).labelsHidden()
             }
         }
     }
@@ -471,13 +502,24 @@ private struct PrivacySettingsView: View {
 
     @ViewBuilder private var nearbySettings: some View {
         section("Nearby people") {
+            row("Camera", detail: "Choose the camera with the best view of you and the people beside you.") {
+                CameraChoicePicker(cameras: model.nearby.cameras, selection: model.nearby.selectedCameraID,
+                                   select: model.nearby.selectCamera, refresh: model.nearby.refreshCameras)
+                .disabled(model.nearby.owner.busy || model.nearby.owner.enrolling)
+            }
+            divider
+            row("Test my protection", detail: "Preview camera coverage, check both sides, and try your warning or blur.") {
+                Button("Run check") { testingProtection = true }
+                    .disabled(model.nearby.owner.busy || model.nearby.owner.enrolling)
+            }
+            divider
             row("Detect additional faces", detail: "Uses your camera while you work. AirPods are not required.") {
                 Toggle("Nearby people", isOn: Binding(get: { model.nearby.wantsMonitoring }, set: { model.setNearbyPeople($0) }))
                     .labelsHidden()
                     .disabled(model.nearby.owner.busy || model.nearby.owner.enrolling)
             }
             divider
-            row("Recognize me", detail: "Checks your saved face before clearing the response, with a short movement and eye-close check.") {
+            row("Recognize me", detail: "Checks your saved face with a small head turn and a look back at the camera before clearing the response.") {
                 if model.nearby.owner.enrolled || model.nearby.owner.enabled {
                     Toggle("Recognize me", isOn: Binding(get: { model.nearby.owner.enabled }, set: { value in
                         model.nearby.stop()
@@ -488,11 +530,23 @@ private struct PrivacySettingsView: View {
                         .disabled(model.nearby.owner.busy)
                 }
             }
-            if model.nearby.owner.enrolled || model.nearby.owner.enabled {
+            if model.nearby.owner.enrolled || model.nearby.owner.enabled || showingOwnerDeletion {
                 divider
                 row("Saved face", detail: "Stored in this Mac’s Keychain. Touch ID or your Mac password is required when monitoring starts.") {
-                    Button("Set up again") { model.nearby.stop(); settingUpOwner = true }
-                    Button("Delete…") { deletingOwner = true }
+                    HStack(spacing: 8) {
+                        Button("Set up again") { model.nearby.stop(); settingUpOwner = true }
+                            .disabled(showingOwnerDeletion)
+                        InlineDeleteButton(
+                            isBusy: model.nearby.owner.busy,
+                            isDeleted: !model.nearby.owner.enrolled && !model.nearby.owner.enabled,
+                            onConfirm: {
+                                showingOwnerDeletion = true
+                                model.nearby.stop()
+                                model.nearby.owner.deleteEnrollment()
+                            },
+                            onFinished: { showingOwnerDeletion = false }
+                        )
+                    }
                 }.disabled(model.nearby.owner.busy)
             }
             if let error = model.nearby.owner.error {
@@ -500,17 +554,34 @@ private struct PrivacySettingsView: View {
                 note(error)
             }
             divider
-            row("When another face appears", detail: model.nearby.response == .warning ? "Shows an amber warning beside the notch. Your screen stays clear." : "Requests blur across every display. Escape clears it and stops the camera.") {
-                Picker("Response", selection: Binding(get: { model.nearby.response }, set: { model.setNearbyResponse($0) })) {
-                    ForEach(NearbyResponse.allCases) { response in Text(response.title).tag(response) }
+            row("Camera response", detail: model.nearby.response == .warning ? "Warns beside the notch first, then blurs if the warning is still unresolved." : "Blurs every display when another face appears or your saved face needs verification. Escape clears it and stops the camera.") {
+                CameraResponsePicker(selection: Binding(
+                    get: { model.nearby.response },
+                    set: { model.setNearbyResponse($0) }
+                ))
+            }
+            if model.nearby.response == .warning {
+                divider
+                row("Blur after", detail: "Time to respond before automatic blur. Clearing the alert cancels the timer; Escape stops monitoring.") {
+                    WarningDurationPicker(duration: Binding(
+                        get: { model.nearby.warningDelay },
+                        set: { model.nearby.setWarningDelay($0) }
+                    ))
                 }
-                .labelsHidden()
-                .frame(width: 162)
+            }
+            divider
+            row("Play warning sound", detail: "Plays a short sound once when a warning appears beside the notch.") {
+                Toggle("Play warning sound", isOn: Binding(
+                    get: { model.nearby.warningSoundEnabled },
+                    set: { model.nearby.setWarningSoundEnabled($0) }
+                )).labelsHidden()
             }
             if model.nearby.enabled || model.nearby.requesting || model.nearby.message != "Off" {
                 divider
                 row(model.nearby.message) {
-                    if model.nearby.canRetry {
+                    if model.nearby.temporarilyPaused {
+                        Button("Resume") { model.nearby.resumeNow() }
+                    } else if model.nearby.canRetry {
                         if model.nearby.status == .unavailable(.screenPermission) {
                             Button("Open Screen Settings") { model.requestScreenPermission() }
                         }
@@ -521,8 +592,12 @@ private struct PrivacySettingsView: View {
                         }
                         Button("Retry") { model.retryNearbyPeople() }
                     } else if model.nearby.enabled {
-                        Circle().fill(model.nearby.alertActive ? Color.orange : SettingsPalette.accent)
-                            .frame(width: 7, height: 7).accessibilityLabel(model.nearby.message)
+                        HStack(spacing: 8) {
+                            if model.nearby.needsAttention && !model.nearby.covered {
+                                Button("Blur now") { model.blurNearbyNow() }
+                            }
+                            Button("Pause 5 min") { model.nearby.pauseForFiveMinutes() }
+                        }
                     }
                 }
             }
@@ -533,7 +608,7 @@ private struct PrivacySettingsView: View {
                 }
                 divider
             }
-            note("Experimental · Poor light, glasses, and people outside the camera’s view can cause misses. Recognize me checks your face locally; it is not Face ID or a screen lock, and photos or video may fool it. Without it, any steady single face can clear the response. Camera images are never saved. Your detection setting is remembered. Monitoring pauses while your Mac is inactive and resumes when you return; Escape turns it off.")
+            note("Detection works within your camera’s view. Poor light, glasses, or an obstructed face can cause misses. Recognize me checks your saved face before clearing the response; without it, any steady single face can clear it. Recognition can be fooled by photos or video and does not replace locking your Mac. Camera images are never saved. Your detection setting is remembered, monitoring pauses while your Mac is inactive, and Escape turns it off.", finePrint: true)
         }
     }
 
@@ -546,7 +621,7 @@ private struct PrivacySettingsView: View {
                 }
             }
             divider
-            row("Separate head position for each display", detail: "Experimental · Keep the display you face clear and blur the others.") {
+            row("Separate head position for each display", detail: "Calibrate each display to keep the one you face clear and blur the others.") {
                 Toggle("Per-display head tracking", isOn: $model.perDisplayTracking).labelsHidden()
                     .disabled(model.connectedDisplays.count < 2)
             }
@@ -624,6 +699,7 @@ private struct PrivacySettingsView: View {
             ForEach(privacy.protectedAreas) { area in
                 divider
                 row("Area in \(area.window.name)", detail: "Follows the window when it moves or resizes.") {
+                    Button("Remember") { privacy.rememberArea(area) }
                     Button("Remove") { privacy.removeArea(area.id) }
                         .accessibilityLabel("Remove area in \(area.window.name)")
                 }
@@ -633,6 +709,14 @@ private struct PrivacySettingsView: View {
                 divider
                 row("Clear selected areas", detail: "Escape also removes all selected areas.") {
                     Button("Remove all areas") { privacy.removeAllAreas() }
+                }
+            }
+            ForEach(privacy.savedAreas) { area in
+                divider
+                row("Saved area in \(area.appName)", detail: "Restores when this app opens a window with the same title, including after relaunch.") {
+                    InlineDeleteButton(itemName: "saved area", confirmationHelp: "Forget this area and stop restoring its blur",
+                                       isBusy: false, isDeleted: false,
+                                       onConfirm: { privacy.removeSavedArea(area.id) }, onFinished: {})
                 }
             }
             if let window = privacy.selectedWindow {
@@ -687,41 +771,43 @@ private struct PrivacySettingsView: View {
         }
     }
 
-    @ViewBuilder private var protectionStatus: some View {
-        if (privacy.selectedWindow != nil || !privacy.protectedAreas.isEmpty || privacy.scanEnabled || privacy.focusEnabled || privacy.nearbyMonitoring) && !privacy.fullScreen {
-            section("Protection status") {
-                row(privacy.captureUnavailable ? "Capture needs attention" : privacy.paused ? "Protection paused" : "Protection active",
-                    detail: "Pause clears window, text, and Focus protection. Turn Nearby people off separately.") {
-                    if privacy.paused || privacy.captureUnavailable {
-                        Button("Resume") { privacy.resume() }
-                    } else {
-                        Button("Pause protection") { privacy.pauseProtection() }
+    private var protectionStatus: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            if (privacy.selectedWindow != nil || !privacy.protectedAreas.isEmpty || privacy.hasAutomaticProtection || privacy.scanEnabled || privacy.focusEnabled || privacy.nearbyMonitoring) && !privacy.fullScreen {
+                section("Protection status") {
+                    row(privacy.captureUnavailable ? "Capture needs attention" : privacy.paused ? "Protection paused" : "Protection active",
+                        detail: "Pause clears window, text, and Focus protection. Turn Nearby people off separately.") {
+                        if privacy.paused || privacy.captureUnavailable {
+                            Button("Resume") { privacy.resume() }
+                        } else {
+                            Button("Pause protection") { privacy.pauseProtection() }
+                        }
                     }
                 }
             }
-        }
-        if !model.screenPermission || privacy.notice != nil {
-            section(model.screenPermission ? "Protection notice" : "Screen access") {
-                if !model.screenPermission {
-                    row("Allow screen access", detail: "QuietGlass needs screen access to create the blur effect.") {
-                        Button("Set up…") { model.requestScreenPermission() }
+            if !model.screenPermission || privacy.notice != nil {
+                section(model.screenPermission ? "Protection notice" : "Screen access") {
+                    if !model.screenPermission {
+                        row("Allow screen access", detail: "QuietGlass needs screen access to create the blur effect.") {
+                            Button("Set up…") { model.requestScreenPermission() }
+                        }
+                    }
+                    if let notice = privacy.notice {
+                        if !model.screenPermission { divider }
+                        note(notice, warning: true)
                     }
                 }
-                if let notice = privacy.notice {
-                    if !model.screenPermission { divider }
-                    note(notice, warning: true)
-                }
             }
+            Text("Blur provides visual protection on your displays. It does not lock your Mac or guarantee protection in recordings or screen sharing.")
+                .font(.system(size: 12))
+                .foregroundStyle(SettingsPalette.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
-        Text("Blur provides visual protection on your displays. It does not lock your Mac or guarantee protection in recordings or screen sharing.")
-            .font(.system(size: 12))
-            .foregroundStyle(SettingsPalette.secondary)
-            .fixedSize(horizontal: false, vertical: true)
     }
 
     @ViewBuilder private var appRules: some View {
-        section("Automatic head blur") {
-            row("Add the active app", detail: "Set how head blur behaves while this app is in use.") {
+        section("App protection") {
+            row("Add the active app", detail: "Choose head sensitivity or automatically blur this app’s windows.") {
                 Button("Add \(privacy.frontAppName)") { privacy.addActiveApp() }
                     .disabled(privacy.frontBundleID == nil)
                     .lineLimit(1)
@@ -732,39 +818,37 @@ private struct PrivacySettingsView: View {
                 Button("Choose app…") { privacy.chooseApp() }
             }
         }
-        section("Your app rules") {
-            if privacy.rules.isEmpty {
-                row("No app rules yet", detail: "All apps use your standard sensitivity. Add an app to give it its own behavior.") { EmptyView() }
-            }
-            ForEach(Array(privacy.rules.enumerated()), id: \.element.id) { index, rule in
-                if index > 0 { divider }
-                row(rule.name) {
-                    appRuleSlider(rule)
-                    Menu {
-                        Button("Remove rule", role: .destructive) { privacy.removeRule(rule.id) }
-                    } label: {
-                        Text("⋮")
-                            .font(.system(size: 19, weight: .medium))
-                            .foregroundStyle(SettingsPalette.secondary)
-                            .frame(width: 28, height: 28)
-                            .contentShape(Circle())
+        VStack(alignment: .leading, spacing: 16) {
+            section("Your app rules") {
+                if privacy.rules.isEmpty {
+                    row("No app rules yet", detail: "All apps use your standard sensitivity. Add an app to give it its own behavior.") { EmptyView() }
+                }
+                ForEach(Array(privacy.rules.enumerated()), id: \.element.id) { index, rule in
+                    if index > 0 { divider }
+                    row(rule.name) {
+                        appRuleSlider(rule)
+                        InlineDeleteButton(
+                            itemName: "\(rule.name) rule",
+                            confirmationHelp: "Remove saved app protection and restore standard head tracking for \(rule.name)",
+                            isBusy: false,
+                            isDeleted: false,
+                            onConfirm: { privacy.removeRule(rule.id) },
+                            onFinished: {}
+                        )
                     }
-                    .menuStyle(.borderlessButton)
-                    .menuIndicator(.hidden)
-                    .fixedSize()
-                    .frame(width: 28)
-                    .accessibilityLabel("\(rule.name) rule options")
-                    .help("Manage this app rule")
-                }
-                .contextMenu {
-                    Button("Remove rule", role: .destructive) { privacy.removeRule(rule.id) }
+                    row("Automatically protect windows", detail: "Blur \(rule.name)’s visible windows whenever they open. Pause protection or press Escape to clear them.") {
+                        Toggle("Automatically protect \(rule.name)", isOn: Binding(
+                            get: { rule.protectWindows },
+                            set: { privacy.setAutomaticWindowProtection(rule.id, enabled: $0) }
+                        )).labelsHidden()
+                    }
                 }
             }
+            Text("Stronger starts blurring sooner and increases blur. Pause head blur keeps manual, window, and text protection available.")
+                .font(.system(size: 12))
+                .foregroundStyle(SettingsPalette.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
-        Text("Stronger starts blurring sooner and increases blur. Pause head blur keeps manual, window, and text protection available.")
-            .font(.system(size: 12))
-            .foregroundStyle(SettingsPalette.secondary)
-            .fixedSize(horizontal: false, vertical: true)
     }
 
     private func appRuleSlider(_ rule: AppPrivacyRule) -> some View {
@@ -881,10 +965,11 @@ private struct PrivacySettingsView: View {
         Rectangle().fill(SettingsPalette.border.opacity(0.7)).frame(height: 1).padding(.horizontal, 16)
     }
 
-    private func note(_ text: String, warning: Bool = false) -> some View {
+    private func note(_ text: String, warning: Bool = false, finePrint: Bool = false) -> some View {
         Text(text)
-            .font(.system(size: 13))
-            .foregroundStyle(warning ? Color.orange : SettingsPalette.secondary)
+            .font(.system(size: finePrint ? 11 : 13))
+            .foregroundStyle(warning ? Color.orange : finePrint ? Color(white: 0.55) : SettingsPalette.secondary)
+            .lineSpacing(finePrint ? 2 : 0)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(16)
@@ -898,20 +983,6 @@ private struct PrivacySettingsView: View {
         Binding(get: { privacy.scanOptions.contains(value) }, set: { enabled in
             if enabled { privacy.scanOptions.insert(value) } else { privacy.scanOptions.remove(value) }
         })
-    }
-}
-
-private struct SettingsButtonStyle: ButtonStyle {
-    @Environment(\.isEnabled) private var isEnabled
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 13))
-            .padding(.horizontal, 12)
-            .padding(.vertical, 7)
-            .background(Color(white: configuration.isPressed ? 0.23 : 0.18), in: RoundedRectangle(cornerRadius: 8))
-            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.white.opacity(0.06), lineWidth: 1))
-            .opacity(isEnabled ? 1 : 0.4)
     }
 }
 

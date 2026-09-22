@@ -8,6 +8,9 @@ DerivedData/
 *.app.backup/
 *.dSYM/
 *.zip
+*.dmg
+dist/
+__pycache__/
 *.p12
 *.pfx
 *.pem

@@ -216,6 +216,7 @@ final class OwnerRecognition: ObservableObject {
                     }
                 }
                 self.camera = camera
+                camera.configureDevice(preferences.string(forKey: CameraSelection.preferenceKey))
                 previewSession = camera.previewSession
                 camera.start()
                 let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in

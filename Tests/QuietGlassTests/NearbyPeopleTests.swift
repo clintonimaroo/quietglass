@@ -8,15 +8,18 @@ private final class FakeFaceCamera: NearbyCameraSession {
     let completion: (Result<NearbyFaceSample, NearbyCameraFailure>) -> Void
     var started = false
     var stopped = false
+    var deviceID: String?
     init(_ completion: @escaping (Result<NearbyFaceSample, NearbyCameraFailure>) -> Void) { self.completion = completion }
     func start() { started = true }
     func stop() { stopped = true }
+    func configureDevice(_ id: String?) { deviceID = id }
 }
 
 @MainActor private final class NearbyHarness {
     let suite = "QuietGlass.NearbyTests.\(UUID().uuidString)"
     let preferences: UserDefaults
     var now: TimeInterval = 1
+    var wallOffset: TimeInterval = 0
     var cameras: [FakeFaceCamera] = []
     var coverChanges: [Bool] = []
     var monitorChanges: [Bool] = []
@@ -34,7 +37,7 @@ private final class FakeFaceCamera: NearbyCameraSession {
             let camera = FakeFaceCamera(completion)
             cameras.append(camera)
             return camera
-        }, clock: { [unowned self] in now }, usesWatchdog: false)
+        }, clock: { [unowned self] in now }, wallClock: { [unowned self] in Date(timeIntervalSince1970: now + wallOffset) }, usesWatchdog: false)
         nearby.onCoverage = { [unowned self] in coverChanges.append($0) }
         nearby.onMonitoring = { [unowned self] in monitorChanges.append($0) }
     }
@@ -63,6 +66,82 @@ private final class FakeFaceCamera: NearbyCameraSession {
 }
 
 final class NearbyPeopleTests: XCTestCase {
+    @MainActor func testImmediateBlurDoesNotChangeWarningPreferenceAndNeedsSteadyClear() async {
+        let h = NearbyHarness(); defer { h.finish() }
+        h.nearby.setResponse(.warning); await h.start()
+        await h.send(2, at: 1); await h.send(2, at: 1.4)
+        h.nearby.blurNow()
+        XCTAssertTrue(h.nearby.covered); XCTAssertEqual(h.nearby.response, .warning)
+        await h.send(1, at: 2); await h.send(1, at: 2.8)
+        XCTAssertTrue(h.nearby.covered)
+        await h.send(1, at: 3.6)
+        XCTAssertFalse(h.nearby.covered)
+    }
+
+    @MainActor func testTimedPauseStopsCameraAndResumesAtDeadlineWithoutStaleCallbacks() async {
+        let h = NearbyHarness(); defer { h.finish() }
+        await h.start(); let original = h.cameras[0]
+        h.nearby.pauseForFiveMinutes()
+        XCTAssertTrue(original.stopped); XCTAssertFalse(h.nearby.enabled)
+        XCTAssertTrue(h.nearby.wantsMonitoring); XCTAssertEqual(h.nearby.pauseSecondsRemaining, 300)
+        original.completion(.success(NearbyFaceSample(count: 2, capturedAt: 1.4))); await h.settle()
+        XCTAssertFalse(h.nearby.covered)
+        h.now = 300; h.nearby.updatePauseDeadline()
+        XCTAssertEqual(h.nearby.pauseSecondsRemaining, 1)
+        h.now = 301; h.nearby.updatePauseDeadline(); await h.settle()
+        XCTAssertEqual(h.cameras.count, 2); XCTAssertTrue(h.nearby.enabled)
+        XCTAssertFalse(h.nearby.temporarilyPaused)
+    }
+
+    @MainActor func testPauseSurvivesRelaunchAndStopCancelsAutomaticResume() async {
+        let h = NearbyHarness(); defer { h.finish() }
+        await h.start(); h.nearby.pauseForFiveMinutes()
+        h.now = 101; h.relaunch(); h.nearby.restore(); await h.settle()
+        XCTAssertEqual(h.nearby.pauseSecondsRemaining, 200); XCTAssertEqual(h.cameras.count, 1)
+        h.nearby.stop(); h.now = 400; h.nearby.updatePauseDeadline(); h.nearby.restore(); await h.settle()
+        XCTAssertFalse(h.nearby.wantsMonitoring); XCTAssertEqual(h.cameras.count, 1)
+    }
+
+    @MainActor func testPauseExpiresDuringSleepWithoutStartingCameraUntilWake() async {
+        let h = NearbyHarness(); defer { h.finish() }
+        await h.start(); h.nearby.pauseForFiveMinutes(); h.nearby.suspend(for: .systemSleep)
+        h.now = 302; h.nearby.updatePauseDeadline(); await h.settle()
+        XCTAssertFalse(h.nearby.enabled); XCTAssertEqual(h.cameras.count, 1)
+        h.nearby.resume(after: .systemSleep); await h.settle()
+        XCTAssertTrue(h.nearby.enabled); XCTAssertEqual(h.cameras.count, 2)
+    }
+
+    @MainActor func testBackwardWallClockChangeCannotExtendTimedPause() async {
+        let h = NearbyHarness(); defer { h.finish() }
+        await h.start(); h.nearby.pauseForFiveMinutes()
+        h.wallOffset = -3600; h.now = 301
+        h.nearby.updatePauseDeadline(); await h.settle()
+        XCTAssertFalse(h.nearby.temporarilyPaused); XCTAssertTrue(h.nearby.enabled)
+    }
+
+    @MainActor func testCameraSelectionPersistsAndReconfiguresMonitoring() async {
+        let h = NearbyHarness(); defer { h.finish() }
+        h.nearby.selectCamera("external-test-camera"); await h.start()
+        XCTAssertEqual(h.cameras.last?.deviceID, "external-test-camera")
+        let first = h.cameras[0]
+        h.nearby.selectCamera(""); await h.settle()
+        XCTAssertTrue(first.stopped); XCTAssertEqual(h.cameras.last?.deviceID, "")
+        h.nearby.selectCamera("external-test-camera"); await h.settle(); h.relaunch()
+        XCTAssertEqual(h.nearby.selectedCameraID, "external-test-camera")
+    }
+    @MainActor func testWarningSoundDefaultsOnAndRemembersMuteAcrossRelaunch() {
+        let h = NearbyHarness()
+        defer { h.finish() }
+        XCTAssertTrue(h.nearby.warningSoundEnabled)
+        h.nearby.setWarningSoundEnabled(false)
+        h.relaunch()
+        XCTAssertFalse(h.nearby.warningSoundEnabled)
+        h.nearby.setWarningSoundEnabled(true)
+        h.relaunch()
+        XCTAssertTrue(h.nearby.warningSoundEnabled)
+        XCTAssertTrue(h.cameras.isEmpty, "Changing sound settings must not start the camera")
+    }
+
     @MainActor func testEnablingDetectionPersistsTheUserChoice() async {
         let h = NearbyHarness()
         defer { h.finish() }
@@ -85,7 +164,7 @@ final class NearbyPeopleTests: XCTestCase {
         XCTAssertEqual(h.monitorChanges, [false])
     }
 
-    @MainActor func testWarningNeverWarmsScreenCaptureAndPersistsTheResponse() async {
+    @MainActor func testWarningWaitsBeforeScreenCaptureAndPersistsTheResponse() async {
         let h = NearbyHarness()
         defer { h.finish() }
         h.nearby.setResponse(.warning)
@@ -102,6 +181,120 @@ final class NearbyPeopleTests: XCTestCase {
         XCTAssertTrue(nextLaunch.wantsMonitoring)
         XCTAssertFalse(nextLaunch.enabled)
         XCTAssertEqual(nextLaunch.status, .off)
+    }
+
+    @MainActor func testUnresolvedWarningBlursAfterTwoMinutesWithoutAnotherCameraFrame() async {
+        let h = NearbyHarness(); defer { h.finish() }
+        h.nearby.setResponse(.warning)
+        await h.start()
+        await h.send(2, at: 1)
+        await h.send(2, at: 1.4)
+        XCTAssertEqual(h.nearby.warningSecondsRemaining, 120)
+        h.now = 121.3
+        h.nearby.checkWarningDeadline()
+        XCTAssertFalse(h.nearby.covered)
+        XCTAssertTrue(h.monitorChanges.isEmpty)
+        h.now = 121.5
+        h.nearby.checkWarningDeadline()
+        XCTAssertTrue(h.nearby.covered)
+        XCTAssertTrue(h.nearby.requiresBlur)
+        XCTAssertEqual(h.coverChanges, [true])
+        XCTAssertEqual(h.monitorChanges, [true])
+        h.nearby.checkWarningDeadline()
+        XCTAssertEqual(h.coverChanges, [true])
+        await h.send(1, at: 122)
+        await h.send(1, at: 122.8)
+        XCTAssertTrue(h.nearby.covered)
+        await h.send(1, at: 123.6)
+        XCTAssertFalse(h.nearby.covered)
+        XCTAssertNil(h.nearby.warningSecondsRemaining)
+        XCTAssertEqual(h.monitorChanges, [true, false])
+    }
+
+    @MainActor func testResolvingOrStoppingWarningCancelsItsDeadline() async {
+        let h = NearbyHarness(); defer { h.finish() }
+        h.nearby.setResponse(.warning)
+        await h.start()
+        await h.send(2, at: 1)
+        await h.send(2, at: 1.4)
+        await h.send(1, at: 2)
+        await h.send(1, at: 2.8)
+        await h.send(1, at: 3.6)
+        h.now = 200
+        h.nearby.checkWarningDeadline()
+        XCTAssertFalse(h.nearby.covered)
+        XCTAssertNil(h.nearby.warningSecondsRemaining)
+        await h.send(2, at: 201)
+        await h.send(2, at: 201.4)
+        XCTAssertEqual(h.nearby.warningSecondsRemaining, 120)
+        h.nearby.stop()
+        h.now = 400
+        h.nearby.checkWarningDeadline()
+        XCTAssertFalse(h.nearby.covered)
+        XCTAssertNil(h.nearby.warningSecondsRemaining)
+    }
+
+    @MainActor func testWarningTimerRunsWithoutCameraCallbacks() async throws {
+        let h = NearbyHarness(); defer { h.finish() }
+        h.nearby.setResponse(.warning)
+        await h.start()
+        await h.send(2, at: 1)
+        await h.send(2, at: 1.4)
+        h.now += 121
+        // Advance the injected clock, then let the real timer deliver its tick.
+        // No sample or explicit deadline check may cause this transition.
+        for _ in 0..<20 {
+            if h.nearby.covered { break }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        XCTAssertTrue(h.nearby.covered)
+        XCTAssertEqual(h.nearby.warningSecondsRemaining, 0)
+        XCTAssertEqual(h.coverChanges, [true])
+    }
+
+    @MainActor func testDurationPersistsAndEditingItDoesNotReleaseExistingBlur() async {
+        let h = NearbyHarness(); defer { h.finish() }
+        XCTAssertEqual(h.nearby.warningDelay, 120)
+        h.nearby.setWarningDelay(180)
+        h.relaunch()
+        XCTAssertEqual(h.nearby.warningDelay, 180)
+        h.nearby.setResponse(.warning)
+        await h.start()
+        await h.send(2, at: 1)
+        await h.send(2, at: 1.4)
+        h.now = 91.4
+        h.nearby.setWarningDelay(60)
+        XCTAssertTrue(h.nearby.covered)
+        h.nearby.setWarningDelay(300)
+        XCTAssertTrue(h.nearby.covered)
+        XCTAssertEqual(h.nearby.warningSecondsRemaining, 0)
+        h.nearby.suspend(for: .systemSleep)
+        h.now = 600
+        h.nearby.checkWarningDeadline()
+        XCTAssertFalse(h.nearby.covered)
+        XCTAssertNil(h.nearby.warningSecondsRemaining)
+        XCTAssertEqual(h.nearby.warningDelay, 300)
+    }
+
+    @MainActor func testCameraFailureCountdownAndRetryKeepBlurUntilAStableFaceReturns() async {
+        let h = NearbyHarness(); defer { h.finish() }
+        h.nearby.setResponse(.warning)
+        await h.start()
+        h.cameras[0].completion(.failure(.interrupted))
+        await h.settle()
+        XCTAssertEqual(h.nearby.warningSecondsRemaining, 120)
+        h.now += 121
+        h.nearby.checkWarningDeadline()
+        XCTAssertTrue(h.nearby.covered)
+        h.nearby.retry()
+        await h.settle()
+        XCTAssertTrue(h.nearby.covered)
+        await h.send(1, at: 123)
+        XCTAssertTrue(h.nearby.covered)
+        await h.send(1, at: 123.8)
+        await h.send(1, at: 124.6)
+        XCTAssertFalse(h.nearby.covered)
+        XCTAssertNil(h.nearby.warningSecondsRemaining)
     }
 
     @MainActor func testRelaunchRestoresSavedDetectionAfterCallbacksAreConnected() async {

@@ -20,13 +20,16 @@ For everyday control, blur every display instantly, protect a specific window or
 | --- | --- |
 | Look-away protection | Uses compatible AirPods to detect changes in head direction and apply screen blur. |
 | Instant privacy | Blurs your displays with a keyboard shortcut or the on-screen controls. |
-| Window and area protection | Covers a selected window or a specific region of your screen. |
+| Window and area protection | Covers a selected window or area; saved areas return for matching window titles after relaunch. |
 | Focus mode | Keeps the active window clear while blurring surrounding content. |
 | Protection profiles | Provides Home, Office, Public, and Focus presets, with adjustable blur and sensitivity. |
-| App rules | Applies standard, stronger, or paused head-tracking protection to individual applications. |
+| App rules | Sets head-tracking sensitivity per app and can automatically blur its visible windows. |
 | Sensitive text detection | Identifies supported sensitive content and custom phrases using local text recognition. |
 | Nearby people | Uses the camera to detect additional visible faces and respond with a warning or automatic blur. |
 | Recognize me | Adds optional owner face enrollment and matching to camera-based protection. |
+| Camera coverage check | Choose a camera, preview visible faces, check both sides, and try your response. |
+| Warning actions | Click the notch warning to open Nearby people settings, then blur immediately, pause for five minutes, or resume. |
+| Everyday use | Optional launch at login and in-app checks for newer public releases. |
 
 ## Getting started
 
@@ -40,18 +43,22 @@ Manual screen blur, window protection, area protection, and Focus mode work with
 
 ### Installation
 
-1. Download and unzip the latest release, then move `QuietGlass.app` into Applications.
-2. Open QuietGlass.
-3. Grant **Screen Recording** access when prompted.
-4. Hover over the control bar above the Dock to access protection controls and settings.
+1. Download the latest DMG, open it, and drag **QuietGlass** into **Applications**. A ZIP is also available.
+2. Open QuietGlass from Applications, then eject the installer.
+3. Grant **Screen Recording** access when prompted. Allow Camera or Motion & Fitness only for the features you enable.
+4. Use the QuietGlass menu bar icon or hover over the floating control bar to open controls and Settings.
 
 The current download is locally signed and not Apple-notarized. If macOS blocks the first launch, follow the **Open Anyway** instructions included in the download.
+
+Choose **QuietGlass Help** from the menu for an offline setup and troubleshooting guide. Closing Settings keeps QuietGlass running; choose **Quit QuietGlass** to stop it. Enable **Launch at login** in General if desired. Use **Check for Updates…** to check for a newer public release, then download it, quit the app, and replace it in Applications. Automatic checks are optional; installation is manual. Your preferences stay on your Mac.
 
 ### Choose your setup
 
 - **For immediate privacy:** use **Blur screen now**, or press **⌃⌥⌘P**.
 - **For look-away protection:** connect your AirPods, select **Start tracking**, and follow the calibration steps.
-- **For camera protection:** open **Settings → Protection → Nearby people**, enable detection, and choose a warning or automatic blur.
+- **For camera protection:** open **Settings → Protection → Nearby people** and enable detection. **Warn me** gives you 2 minutes to respond before blurring; use **Blur after** to change the delay. **Blur automatically** covers the screen as soon as detection is confirmed.
+- **To check camera coverage:** choose a camera and click **Run check**. A person must enter the camera’s view to be detected; a wider-view webcam can help cover the sides.
+- **For repeatable app protection:** add an app under App rules and enable **Automatically protect windows**. Use **Remember** on a selected area to restore it for windows with the same app and title. Pause or Escape clears coverage without deleting these saved rules.
 - **For owner recognition:** select **Set up my face**, authenticate with Touch ID or your Mac password, and follow the circular camera guide. Save your face when enrollment is complete.
 
 See the [camera protection guide](CAMERA-PROTECTION.md) for setup details, recognition behavior, and privacy.
@@ -83,9 +90,10 @@ QuietGlass requests permissions for the features you choose to use.
 QuietGlass processes screen content, recognized text, camera frames, and motion data on your Mac.
 
 - Screen images, camera frames, recognized text, and motion history are processed without being saved or uploaded by QuietGlass.
-- Preferences, app rules, and custom phrases are stored locally.
+- Preferences, app rules, saved area coordinates, and custom phrases are stored locally. Saved areas match a one-way digest of the window title; the title itself is not stored.
 - Optional owner enrollment stores a face template in the encrypted macOS Keychain. Saved face data can be deleted in Settings.
-- Camera access is limited to enrollment and enabled Nearby people monitoring. Your detection setting is remembered across app launches. Monitoring pauses while your Mac is inactive and resumes when you return. Turning detection off or pressing Escape keeps it off until you enable it again.
+- Camera access is limited to enrollment, enabled Nearby people monitoring, and an explicitly started coverage check. Your detection setting is remembered across app launches. Monitoring pauses while your Mac is inactive and resumes when you return. Turning detection off or pressing Escape keeps it off until you enable it again.
+- Update checks contact GitHub for public release metadata. They do not include screen content, camera data, face templates, or custom phrases, and automatic checks are off by default.
 - QuietGlass does not record microphone audio.
 - Core protection features do not require a hosted backend or cloud inference.
 
@@ -120,6 +128,8 @@ The build script produces:
 ```
 
 The app is built for the current Mac’s architecture. Standard builds use the bundled recognition model and require no API keys or additional model downloads.
+
+For universal DMG and ZIP packaging, see the [release guide](RELEASING.md).
 
 ### Project structure
 
@@ -199,4 +209,4 @@ Please report vulnerabilities privately using the [Security Policy](SECURITY.md)
 
 QuietGlass is developed by Clinton Imaro and released under the [MIT License](LICENSE).
 
-Third-party models, icons, and other bundled components retain their respective licenses and attribution requirements. See the [icon license](Resources/Icons/LICENSE.md) and [SFace model license](Resources/Models/SFace-LICENSE.txt).
+Third-party models, icons, and audio retain their respective rights and attribution requirements. See the [icon license](Resources/Icons/LICENSE.md), [SFace model license](Resources/Models/SFace-LICENSE.txt), and [warning sound source notice](Resources/Sounds/NOTICE.txt).

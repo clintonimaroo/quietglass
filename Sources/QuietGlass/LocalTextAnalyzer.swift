@@ -3,6 +3,7 @@
 import Vision
 import CoreVideo
 import ShieldCore
+import CryptoKit
 
 final class LocalTextAnalyzer {
     private let queue = DispatchQueue(label: "local.clinton.QuietGlass.text", qos: .utility)
@@ -10,6 +11,7 @@ final class LocalTextAnalyzer {
     private var busy = false
     private var lastScan: TimeInterval = 0
     private var cancelled = false
+    private var lastFingerprint: SHA256.Digest?
     private let phrases: [String]
     private let options: SensitiveTextOptions
     private let completion: @MainActor (Result<[CGRect], Error>) -> Void
@@ -34,6 +36,11 @@ final class LocalTextAnalyzer {
         lastScan = now
         lock.unlock()
         queue.async { [self] in
+            let fingerprint = FrameFingerprint.digest(buffer)
+            if let fingerprint, fingerprint == lastFingerprint {
+                lock.lock(); busy = false; lock.unlock()
+                return
+            }
             let result: Result<[CGRect], Error> = Result {
                 try autoreleasepool {
                     let request = VNRecognizeTextRequest()
@@ -44,6 +51,7 @@ final class LocalTextAnalyzer {
                     return Self.regions(in: request.results ?? [], options: options, phrases: phrases)
                 }
             }
+            if case .success = result { lastFingerprint = fingerprint }
             lock.lock()
             busy = false
             let shouldDeliver = !cancelled
